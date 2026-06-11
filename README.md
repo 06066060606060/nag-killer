@@ -4,7 +4,7 @@
 (tested on AtomS3 lite board with CAN base)
 
 TESTED ON MODEL Y 2024 HW4 Firmware 2026.20 (Party CAN pin 2-3) CAN ID 0X370 
-other model can use different CAN ID (0x052) 
+
 
 # nag_echo v2 — runtime-configurable, with on-board WiFi dashboard
 
