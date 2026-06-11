@@ -1,3 +1,51 @@
+/*
+    ================================================================
+    nag_echo v2 — runtime-configurable CAN counter-echo
+                   with on-board WiFi dashboard
+    ================================================================
+
+    Educational / research firmware. NOT for use on public roads.
+    Hard safety cap: torque is clamped to ±1.80 Nm in firmware,
+    cannot be overridden from the dashboard.
+
+    Hardware: LILYGO T-CAN485 (ESP32-D0WDQ6-V3 + SN65HVD230)
+
+    USAGE
+    -----
+    1. Flash the sketch (Arduino IDE → ESP32 Dev Module, or arduino-cli).
+    2. The board boots and starts a WiFi access point:
+           SSID: NagKiller-XXXX   (XXXX = last 4 hex of chip MAC)
+           PASS: nagkiller        (yes, cleartext on purpose — local-only)
+    3. Connect any phone/laptop and open  http://192.168.4.1
+    4. Pick MODE A, B, or C from the top of the page, or tweak the
+       advanced parameters. Settings are stored in NVS and survive
+       reboot.
+
+    MODES
+    -----
+    A — Simple    : echo CAN 0x370 with fixed +1.80 Nm, handsOn=1 always.
+                    Proven on Model Y 2022 HW3 (pre-Juniper).
+    B — TSL6P     : echo CAN 0x052 cycling through {+1.80, +1.50, -1.50,
+                    -1.80} Nm with a burst/pause time pattern (1.0 s
+                    inject, 1.5 s rest by default — both configurable).
+                    Closer to the actual TSL6P device behaviour observed
+                    in sniff logs. Try this if mode A triggers ESP/TC
+                    warnings on stricter firmware (e.g. MY Juniper 2025).
+    C — State     : community algorithm by @Linu — gated state machine
+                    that watches DAS_autopilotHandsOnState (1/2/3) and
+                    only injects under tight conditions (AP active,
+                    |steering angle| ≤ 5°, post entry-pause, etc.).
+                    REQUIRES that the firmware can read autopilot state
+                    and steering angle on the same bus. If the relevant
+                    context CAN frames are not seen for >1 s, Mode C
+                    refuses to inject.
+    Custom        : tweak any field individually.
+
+    License: GPL-3.0
+    ================================================================
+*/
+
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
