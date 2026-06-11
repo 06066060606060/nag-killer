@@ -1,11 +1,10 @@
-# Port of the nag-killer by @nicolozak for other esp32 board
+# Port of the nag-killer by @nicolozak for other esp32 board (tested on AtomS3 lite board with CAN base)
 [@nicolozak](https://gitlab.com/nicolozak/nag-killer/-/tree/main?ref_type=heads)
 
-# nag_echo v2 — runtime-configurable, with on-board WiFi dashboard
-
 TESTED ON MODEL Y 2024 HW4 Firmware 2026.20 (Party CAN pin 2-3) CAN ID 0X370 
-
 other model can use different CAN ID (0x052) 
+
+# nag_echo v2 — runtime-configurable, with on-board WiFi dashboard
 
 Same idea as `v1_simple`, but every parameter that v1 had hard-coded is
 now changeable at runtime from a tiny web dashboard hosted by the ESP32
