@@ -3,7 +3,7 @@
 
 # nag_echo v2 — runtime-configurable, with on-board WiFi dashboard
 
-TESTED ON MODEL Y 2024 HW4 Firmware 2026.20
+TESTED ON MODEL Y 2024 HW4 Firmware 2026.20 (Party CAN pin 2-3)
 
 Same idea as `v1_simple`, but every parameter that v1 had hard-coded is
 now changeable at runtime from a tiny web dashboard hosted by the ESP32
