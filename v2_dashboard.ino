@@ -544,7 +544,7 @@ static void webTask(void* arg) {
   WiFi.mode(WIFI_AP);
   uint8_t mac[6]; WiFi.softAPmacAddress(mac);
   char ssid[24];
-  snprintf(ssid, sizeof(ssid), "Falcon-%02X%02X", mac[4], mac[5]);
+  snprintf(ssid, sizeof(ssid), "NagKiller-%02X%02X", mac[4], mac[5]);
   WiFi.softAP(ssid, "nagkiller");
   IPAddress ip = WiFi.softAPIP();
   Serial.printf("AP: SSID=%s PASS=nagkiller IP=%s\n", ssid, ip.toString().c_str());
