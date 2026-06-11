@@ -3,12 +3,12 @@
 
 # nag_echo v2 — runtime-configurable, with on-board WiFi dashboard
 
-TESTED ON MODEL Y 2024 HW4 Firmware 2026.20 (Party CAN pin 2-3)
+TESTED ON MODEL Y 2024 HW4 Firmware 2026.20 (Party CAN pin 2-3) CAN ID 0X370 
+other model can use different CAN ID (0x052) 
 
 Same idea as `v1_simple`, but every parameter that v1 had hard-coded is
 now changeable at runtime from a tiny web dashboard hosted by the ESP32
 itself. No internet required — the board runs its own WiFi access point.
-
 ## What's different from v1
 
 | | v1_simple | v2_dashboard |
@@ -29,7 +29,7 @@ CAN `0x370`, fixed `+1.80 Nm`, `handsOn=1` on every echoed frame. Same
 algorithm as v1. Proven on Model Y 2022 HW3 (pre-Juniper firmware).
 
 ### B — TSL6P (burst/pause)
-CAN `0x052`, torque cycles through `{+1.80, +1.50, −1.50, −1.80}` Nm,
+CAN `0x370`, torque cycles through `{+1.80, +1.50, −1.50, −1.80}` Nm,
 **bursty time pattern**: `1000 ms` of injection, `1500 ms` of rest by
 default (both configurable). Mirrors the actual TSL6P device behaviour
 observed in sniff logs — the rest periods are now believed to be the
