@@ -13,16 +13,16 @@ now changeable at runtime from a tiny web dashboard hosted by the ESP32
 itself. No internet required — the board runs its own WiFi access point.
 ## What's different from v1
 
-| | v1_simple | v2_dashboard |
+| v2_dashboard |
 |---|---|---|
-| Target CAN ID | hard-coded `0x370` | runtime, default `0x370` |
-| Torque values | fixed `+1.80 Nm` | table of 1–8, runtime |
-| handsOn=1 rate | always | runtime, 0–100 % |
-| Configuration | recompile + reflash | web UI, persisted in NVS |
-| Dependencies | none beyond TWAI | `WiFi.h` + `WebServer.h` (built-in) |
-| Binary size | ~280 KB | ~970 KB |
-| Idle current | low | +~80 mA (WiFi AP) |
-| Modes | one | **A**, **B**, **C**, **Custom** |
+| Target CAN ID | runtime, default `0x370` |
+| Torque values | table of 1–8, runtime |
+| handsOn=1 rate | runtime, 0–100 % |
+| Configuration | web UI, persisted in NVS |
+| Dependencies | `WiFi.h` + `WebServer.h` (built-in) |
+| Binary size | ~970 KB |
+| Idle current | +~80 mA (WiFi AP) |
+| Modes | **A**, **B**, **C**, **Custom** |
 
 ## Modes (one click in the dashboard)
 
