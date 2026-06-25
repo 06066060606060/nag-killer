@@ -9,7 +9,7 @@ TESTED ON MODEL Y 2024 HW4 Firmware 2026.20 (Party CAN pin 2-3) CAN ID 0X370
 # nag_echo v2 — runtime-configurable, with on-board WiFi dashboard
 
 | v2_dashboard |
-|---|---|---|
+|---|---|
 | Target CAN ID | runtime, default `0x370` |
 | Torque values | table of 1–8, runtime |
 | handsOn=1 rate | runtime, 0–100 % |
