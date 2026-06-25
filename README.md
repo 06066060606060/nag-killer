@@ -8,17 +8,6 @@ TESTED ON MODEL Y 2024 HW4 Firmware 2026.20 (Party CAN pin 2-3) CAN ID 0X370
 
 # nag_echo v2 — runtime-configurable, with on-board WiFi dashboard
 
-| v2_dashboard |
-|---|---|
-| Target CAN ID | runtime, default `0x370` |
-| Torque values | table of 1–8, runtime |
-| handsOn=1 rate | runtime, 0–100 % |
-| Configuration | web UI, persisted in NVS |
-| Dependencies | `WiFi.h` + `WebServer.h` (built-in) |
-| Binary size | ~970 KB |
-| Idle current | +~80 mA (WiFi AP) |
-| Modes | **A**, **B**, **C**, **Custom** |
-
 ## Modes (one click in the dashboard)
 
 ### A — Simple
