@@ -3,7 +3,7 @@
 
 (tested on AtomS3 lite board with CAN base)
 
-TESTED ON MODEL Y 2024 HW4 Firmware 2026.20 (Party CAN pin 2-3) CAN ID 0X370 
+TESTED ON MODEL Y 2024 HW4 Firmware 2026.20 (Party CAN pin 2-3) MODE B CAN ID 0X370 
 
 
 # nag_echo v2 — runtime-configurable, with on-board WiFi dashboard
@@ -74,7 +74,7 @@ arduino-cli compile --fqbn esp32:esp32:esp32 .
 arduino-cli upload  --fqbn esp32:esp32:esp32 --port COMx .
 ```
 
-The folder contains two `.ino` files — Arduino concatenates them
+The folder contains two `.ino` files — Arduino IDE concatenates them
 automatically.
 
 ## Use the dashboard
