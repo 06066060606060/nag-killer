@@ -11,8 +11,8 @@ TESTED ON MODEL Y 2024 HW4 Firmware 2026.20 (Party CAN pin 2-3) MODE B CAN ID 0X
 ## Modes (one click in the dashboard)
 
 ### A — Simple
-CAN `0x370`, fixed `+1.80 Nm`, `handsOn=1` on every echoed frame. Same
-algorithm as v1. Proven on Model Y 2022 HW3 (pre-Juniper firmware).
+CAN `0x370`, fixed `+1.80 Nm`, `handsOn=1` on every echoed frame.
+Proven on Model Y 2022 HW3 (pre-Juniper firmware).
 
 ### B — TSL6P (burst/pause)
 CAN `0x370`, torque cycles through `{+1.80, +1.50, −1.50, −1.80}` Nm,
