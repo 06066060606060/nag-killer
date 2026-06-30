@@ -112,3 +112,6 @@ and (for Mode C) the live `apState`, `handsOnState` and `steeringDeg`.
 ## License
 
 GPL-3.0
+
+## My Discord server
+https://discord.gg/9t5pMuts3
