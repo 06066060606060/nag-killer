@@ -8,62 +8,30 @@
     Hard safety cap: torque is clamped to ±1.80 Nm in firmware,
     cannot be overridden from the dashboard.
 
-    Hardware: LILYGO T-CAN485 (ESP32-D0WDQ6-V3 + SN65HVD230)
-
-    USAGE
-    -----
-    1. Flash the sketch (Arduino IDE → ESP32 Dev Module, or arduino-cli).
-    2. The board boots and starts a WiFi access point:
-           SSID: NagKiller-XXXX   (XXXX = last 4 hex of chip MAC)
-           PASS: nagkiller        (yes, cleartext on purpose — local-only)
-    3. Connect any phone/laptop and open  http://192.168.4.1
-    4. Pick MODE A, B, or C from the top of the page, or tweak the
-       advanced parameters. Settings are stored in NVS and survive
-       reboot.
-
-    MODES
-    -----
-    A — Simple    : echo CAN 0x370 with fixed +1.80 Nm, handsOn=1 always.
-                    Proven on Model Y 2022 HW3 (pre-Juniper).
-    B — TSL6P     : echo CAN 0x052 cycling through {+1.80, +1.50, -1.50,
-                    -1.80} Nm with a burst/pause time pattern (1.0 s
-                    inject, 1.5 s rest by default — both configurable).
-                    Closer to the actual TSL6P device behaviour observed
-                    in sniff logs. Try this if mode A triggers ESP/TC
-                    warnings on stricter firmware (e.g. MY Juniper 2025).
-    C — State     : community algorithm by @Linu — gated state machine
-                    that watches DAS_autopilotHandsOnState (1/2/3) and
-                    only injects under tight conditions (AP active,
-                    |steering angle| ≤ 5°, post entry-pause, etc.).
-                    REQUIRES that the firmware can read autopilot state
-                    and steering angle on the same bus. If the relevant
-                    context CAN frames are not seen for >1 s, Mode C
-                    refuses to inject.
-    Custom        : tweak any field individually.
-
-    License: GPL-3.0
-    ================================================================
+    Hardware: ESP32S3 + SN65HVD230
 */
-
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <nvs_flash.h>
+#include <esp_system.h>
 #include "driver/twai.h"
+#include "index_html.h"
 
 #define CAN_TX_PIN    5
-#define CAN_RX_PIN    6
+#define CAN_RX_PIN    4
 
 // ── Safety hard caps (NOT user-overridable) ─────────────────────
-//   Torque (Nm) = raw * 0.01 - 20.5
-//   +1.80 Nm = raw 2230 = 0x8B6  → byte2 low nibble = 0x8, byte3 = 0xB6
-//   -1.80 Nm = raw 1870 = 0x74E  → byte2 low nibble = 0x7, byte3 = 0x4E
 static const uint16_t TORQUE_RAW_MAX = 0x8B6;
 static const uint16_t TORQUE_RAW_MIN = 0x74E;
 static const float    TORQUE_NM_MAX  = +1.80f;
 static const float    TORQUE_NM_MIN  = -1.80f;
 static const uint8_t  MAX_TORQUE_ENTRIES = 8;
+
+// ADDED: 15-second injection delay
+static const unsigned long INJECTION_BOOT_DELAY_MS = 15000;
 
 // ── Modes ───────────────────────────────────────────────────────
 enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_C = 2, MODE_CUSTOM = 3 };
@@ -96,7 +64,7 @@ struct Config {
 static Config cfg;
 static portMUX_TYPE cfgMux = portMUX_INITIALIZER_UNLOCKED;
 
-// ── Live context (Mode C). Updated from canTask, read in echo. ──
+// ── Live context (Mode C) ───────────────────────────────────────
 struct Context {
   uint8_t  apState;
   uint8_t  handsOnState;
@@ -124,12 +92,13 @@ static volatile uint8_t  lastInjectedHo = 0;
 static volatile float    lastInjectedNm = 0;
 static unsigned long bootTime = 0;
 
-// Petit log CAN global
 static volatile uint32_t canAnyFrames = 0;
 static unsigned long lastCanLogMs = 0;
+static unsigned long lastStatusLog = 0;
 
 // ── Persistence ─────────────────────────────────────────────────
 static Preferences prefs;
+static uint8_t lastMode = 0xFF;
 
 static void cfgSetCommonDefaults(Config& c) {
   c.enabled        = true;
@@ -208,33 +177,64 @@ static void cfgClampAll(Config& c) {
 }
 
 static void cfgLoad() {
-  prefs.begin("nag", true);
+  Serial.println("NVS: Loading config...");
+  
+  esp_err_t err = nvs_flash_init();
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    Serial.println("NVS: Corrupted, erasing...");
+    ESP_ERROR_CHECK(nvs_flash_erase());
+    err = nvs_flash_init();
+  }
+  
+  if (err != ESP_OK) {
+    Serial.printf("NVS: Init failed %d, using defaults\n", err);
+    cfgDefaultsModeA(cfg);
+    return;
+  }
+  
+  if (!prefs.begin("nag", true)) {
+    Serial.println("NVS: No existing config, using defaults");
+    cfgDefaultsModeA(cfg);
+    return;
+  }
+  
   if (!prefs.isKey("v")) {
     prefs.end();
     cfgDefaultsModeA(cfg);
     return;
   }
+  
   cfgSetCommonDefaults(cfg);
   cfg.enabled        = prefs.getBool("en", true);
   cfg.mode           = prefs.getUChar("mode", 0);
   cfg.targetId       = prefs.getUShort("id", 0x370);
   cfg.torqueCount    = prefs.getUChar("tc", 1);
+  
   size_t n = prefs.getBytes("tb2", cfg.torqueB2, MAX_TORQUE_ENTRIES);
   if (n == 0) { cfg.torqueB2[0] = 0x08; }
   n = prefs.getBytes("tb3", cfg.torqueB3, MAX_TORQUE_ENTRIES);
   if (n == 0) { cfg.torqueB3[0] = 0xB6; }
+  
   cfg.hoRatePct      = prefs.getUChar("ho", 100);
   cfg.burstMs        = prefs.getUShort("bms", 1000);
   cfg.pauseMs        = prefs.getUShort("pms", 1500);
   cfg.apStateId      = prefs.getUShort("apid", 0x399);
   cfg.steeringId     = prefs.getUShort("stid", 0x129);
   prefs.end();
+  
   cfgClampAll(cfg);
+  lastMode = cfg.mode;
+  Serial.println("NVS: Config loaded OK");
 }
 
 static void cfgSave() {
   cfgClampAll(cfg);
-  prefs.begin("nag", false);
+  
+  if (!prefs.begin("nag", false)) {
+    Serial.println("NVS: Save failed - could not open");
+    return;
+  }
+  
   prefs.putBool("en",     cfg.enabled);
   prefs.putUChar("mode",  cfg.mode);
   prefs.putUShort("id",   cfg.targetId);
@@ -248,27 +248,43 @@ static void cfgSave() {
   prefs.putUShort("stid", cfg.steeringId);
   prefs.putUChar("v",     2);
   prefs.end();
+  
+  lastMode = cfg.mode;
 }
 
 static bool decideInjection(const twai_message_t& src,
                             uint8_t& out_b2, uint8_t& out_b3, bool& out_setHo) {
+  if (src.data_length_code < 8) return false;
+  
   unsigned long now = millis();
 
   uint8_t  mode, tCount, hoPct;
   uint16_t burstMs, pauseMs;
   uint8_t  tB2[MAX_TORQUE_ENTRIES], tB3[MAX_TORQUE_ENTRIES];
+  
   portENTER_CRITICAL(&cfgMux);
   mode    = cfg.mode;
   tCount  = cfg.torqueCount;
   hoPct   = cfg.hoRatePct;
   burstMs = cfg.burstMs;
   pauseMs = cfg.pauseMs;
-  for (uint8_t i = 0; i < tCount; i++) { tB2[i] = cfg.torqueB2[i]; tB3[i] = cfg.torqueB3[i]; }
+  for (uint8_t i = 0; i < tCount; i++) { 
+    tB2[i] = cfg.torqueB2[i]; 
+    tB3[i] = cfg.torqueB3[i]; 
+  }
   portEXIT_CRITICAL(&cfgMux);
 
+  static uint8_t  tIdx = 0;
+  static uint16_t hoSeq = 0;
+  static uint32_t lastChangeMs = 0;
+  
+  if (mode != lastMode) {
+    tIdx = 0;
+    hoSeq = 0;
+    lastChangeMs = 0;
+  }
+
   if (mode == MODE_A || mode == MODE_CUSTOM) {
-    static uint8_t  tIdx = 0;
-    static uint16_t hoSeq = 0;
     out_b2 = tB2[tIdx % tCount];
     out_b3 = tB3[tIdx % tCount];
     tIdx++;
@@ -283,9 +299,11 @@ static bool decideInjection(const twai_message_t& src,
     if (cycleMs == 0) cycleMs = 1;
     uint32_t phase = (uint32_t)(now - bootTime) % cycleMs;
     if (phase >= burstMs) return false;
-    static uint8_t  tIdx = 0;
-    static uint32_t lastChangeMs = 0;
-    if (now - lastChangeMs >= 200) { tIdx = (tIdx + 1) % tCount; lastChangeMs = now; }
+    
+    if (now - lastChangeMs >= 200) { 
+      tIdx = (tIdx + 1) % tCount; 
+      lastChangeMs = now; 
+    }
     out_b2 = tB2[tIdx];
     out_b3 = tB3[tIdx];
     out_setHo = true;
@@ -294,7 +312,9 @@ static bool decideInjection(const twai_message_t& src,
 
   if (mode == MODE_C) {
     Context c;
-    portENTER_CRITICAL(&ctxMux); c = ctx; portEXIT_CRITICAL(&ctxMux);
+    portENTER_CRITICAL(&ctxMux); 
+    c = ctx; 
+    portEXIT_CRITICAL(&ctxMux);
 
     const unsigned long FRESH_MS = 1000;
     if (now - c.lastApStateMs  > FRESH_MS) return false;
@@ -344,8 +364,11 @@ static bool decideInjection(const twai_message_t& src,
   return false;
 }
 
-static IRAM_ATTR void echoModified(const twai_message_t& src) {
-  uint8_t b2 = 0, b3 = 0; bool setHo = false;
+static void echoModified(const twai_message_t& src) {
+  if (src.data_length_code < 8) return;
+  
+  uint8_t b2 = 0, b3 = 0; 
+  bool setHo = false;
   if (!decideInjection(src, b2, b3, setHo)) return;
 
   twai_message_t e;
@@ -359,6 +382,7 @@ static IRAM_ATTR void echoModified(const twai_message_t& src) {
   e.data[4] = setHo ? (src.data[4] | 0x40) : src.data[4];
   e.data[5] = src.data[5];
   e.data[6] = (src.data[6] & 0xF0) | (((src.data[6] & 0x0F) + 1) & 0x0F);
+  
   uint16_t s = e.data[0] + e.data[1] + e.data[2] + e.data[3]
              + e.data[4] + e.data[5] + e.data[6];
   e.data[7] = (uint8_t)((s + 0x73) & 0xFF);
@@ -366,26 +390,38 @@ static IRAM_ATTR void echoModified(const twai_message_t& src) {
   unsigned long t0 = micros();
   esp_err_t err = twai_transmit(&e, pdMS_TO_TICKS(2));
   echoLatUs = micros() - t0;
+  
   if (err == ESP_OK) {
-    txOk++; echoCount++;
+    txOk++; 
+    echoCount++;
     lastInjectedHo = setHo ? 1 : 0;
     uint16_t raw = ((b2 & 0x0F) << 8) | b3;
     lastInjectedNm = raw * 0.01f - 20.5f;
+    
+//    Serial.printf("[TX] id=0x%03X data=%02X%02X%02X%02X%02X%02X%02X%02X t=%.2fNm\n",
+//     e.identifier, e.data[0], e.data[1], e.data[2], e.data[3],
+//      e.data[4], e.data[5], e.data[6], e.data[7], lastInjectedNm);
   } else {
     txFail++;
+    Serial.printf("[TX FAIL] %s\n", esp_err_to_name(err));
   }
 }
 
 static void updateApState(const twai_message_t& f) {
+  if (f.data_length_code < 8) return;
+  
   uint8_t apb, apsh, apmask, hob, hosh, homask;
   portENTER_CRITICAL(&cfgMux);
   apb = cfg.apStateByte; apsh = cfg.apStateShift; apmask = cfg.apStateMask;
   hob = cfg.handsOnByte; hosh = cfg.handsOnShift; homask = cfg.handsOnMask;
   portEXIT_CRITICAL(&cfgMux);
-  if (apb >= 8 || hob >= 8) return;
+  
+  if (apb >= f.data_length_code || hob >= f.data_length_code) return;
+  
   uint8_t ap = (f.data[apb] >> apsh) & apmask;
   uint8_t ho = (f.data[hob] >> hosh) & homask;
   unsigned long now = millis();
+  
   portENTER_CRITICAL(&ctxMux);
   ctx.apState = ap;
   ctx.lastApStateMs = now;
@@ -401,38 +437,49 @@ static void updateApState(const twai_message_t& f) {
 }
 
 static void updateSteering(const twai_message_t& f) {
-  uint8_t bh, bl; float scale, offs;
+  if (f.data_length_code < 8) return;
+  
+  uint8_t bh, bl; 
+  float scale, offs;
   portENTER_CRITICAL(&cfgMux);
-  bh = cfg.steeringByteHi; bl = cfg.steeringByteLo;
-  scale = cfg.steeringScale; offs = cfg.steeringOffset;
+  bh = cfg.steeringByteHi; 
+  bl = cfg.steeringByteLo;
+  scale = cfg.steeringScale; 
+  offs = cfg.steeringOffset;
   portEXIT_CRITICAL(&cfgMux);
-  if (bh >= 8 || bl >= 8) return;
+  
+  if (bh >= f.data_length_code || bl >= f.data_length_code) return;
+  
   int16_t raw = (int16_t)(((uint16_t)f.data[bh] << 8) | f.data[bl]);
   float deg = raw * scale + offs;
   unsigned long now = millis();
+  
   portENTER_CRITICAL(&ctxMux);
   ctx.steeringAngleDeg = deg;
   ctx.lastSteeringMs = now;
   portEXIT_CRITICAL(&ctxMux);
 }
 
-// ── CAN task (Core 1) ───────────────────────────────────────────
 static void canTask(void* arg) {
   for (;;) {
     twai_message_t f;
+    
+    // ADDED: Reboot if no CAN frames after 20 seconds
+    if ((millis() - bootTime) > 20000 && canAnyFrames == 0) {
+      Serial.println("No CAN frames after 20 sec, rebooting...");
+      delay(1000);
+      ESP.restart();
+    }
+    
     while (twai_receive(&f, pdMS_TO_TICKS(2)) == ESP_OK) {
       canAnyFrames++;
 
       unsigned long now = millis();
       if (now - lastCanLogMs >= 1000) {
-        Serial.printf("[CAN] traffic ok total=%lu last_id=0x%03lX dlc=%u data=",
+        Serial.printf("[CAN] total=%lu last_id=0x%03lX dlc=%u\n",
                       (unsigned long)canAnyFrames,
                       (unsigned long)f.identifier,
                       (unsigned)f.data_length_code);
-        for (int i = 0; i < f.data_length_code; i++) {
-          Serial.printf("%02X ", f.data[i]);
-        }
-        Serial.println();
         lastCanLogMs = now;
       }
 
@@ -451,44 +498,68 @@ static void canTask(void* arg) {
       if (f.identifier != targetId) continue;
       rxFrames++;
 
+      if (f.data_length_code < 5) continue;
+      
       uint8_t ho = (f.data[4] >> 6) & 0x03;
       uint16_t tRaw = ((f.data[2] & 0x0F) << 8) | f.data[3];
       realHo     = ho;
       realTorque = tRaw * 0.01f - 20.5f;
 
       bool isOurs = false;
-      portENTER_CRITICAL(&cfgMux);
-      for (uint8_t i = 0; i < cfg.torqueCount; i++) {
-        if (f.data[3] == cfg.torqueB3[i]) { isOurs = true; break; }
+      if (ho == 1) {
+        portENTER_CRITICAL(&cfgMux);
+        for (uint8_t i = 0; i < cfg.torqueCount; i++) {
+          uint16_t cfgRaw = ((cfg.torqueB2[i] & 0x0F) << 8) | cfg.torqueB3[i];
+          if (tRaw == cfgRaw) { 
+            isOurs = true; 
+            break; 
+          }
+        }
+        portEXIT_CRITICAL(&cfgMux);
       }
-      portEXIT_CRITICAL(&cfgMux);
-      isOurs = isOurs && (ho == 1);
 
-      if (en && !isOurs && ho <= 1) {
+      // ADDED: 30-second injection delay
+      bool bootDelayPassed = (millis() - bootTime) >= INJECTION_BOOT_DELAY_MS;
+      
+      if (en && bootDelayPassed && !isOurs && ho <= 1) {
         echoModified(f);
       }
     }
 
-    twai_status_info_t st; 
-    twai_get_status_info(&st);
-    if (st.state == TWAI_STATE_BUS_OFF) {
-      twai_initiate_recovery();
-      vTaskDelay(pdMS_TO_TICKS(300));
+    twai_status_info_t st;
+    if (twai_get_status_info(&st) == ESP_OK) {
+      unsigned long nowStatus = millis();
+      if (nowStatus - lastStatusLog >= 5000) {
+        Serial.printf("[TWAI] state=%d tx_err=%u rx_err=%u missed=%u txOk=%u\n",
+          st.state, st.tx_error_counter, st.rx_error_counter, 
+          st.rx_missed_count, (unsigned)txOk);
+        lastStatusLog = nowStatus;
+      }
+
+      if (st.state == TWAI_STATE_BUS_OFF) {
+        Serial.println("TWAI: Bus off, recovering...");
+        twai_initiate_recovery();
+        vTaskDelay(pdMS_TO_TICKS(300));
+      }
     }
+
     vTaskDelay(1);
   }
 }
 
-// ── HTML page (PROGMEM) ─────────────────────────────────────────
 extern const char INDEX_HTML[] PROGMEM;
-
-// ── Web server (Core 0) ─────────────────────────────────────────
 static WebServer server(80);
 
 static String cfgToJson() {
   Config c;
-  portENTER_CRITICAL(&cfgMux); c = cfg; portEXIT_CRITICAL(&cfgMux);
-  String s = "{";
+  portENTER_CRITICAL(&cfgMux); 
+  c = cfg; 
+  portEXIT_CRITICAL(&cfgMux);
+  
+  String s;
+  s.reserve(512);
+  
+  s = "{";
   s += "\"enabled\":";    s += (c.enabled ? "true" : "false");
   s += ",\"mode\":";      s += String(c.mode);
   s += ",\"targetId\":";  s += String(c.targetId);
@@ -513,8 +584,14 @@ static String cfgToJson() {
 
 static String statsToJson() {
   Context c;
-  portENTER_CRITICAL(&ctxMux); c = ctx; portEXIT_CRITICAL(&ctxMux);
-  String s = "{";
+  portENTER_CRITICAL(&ctxMux); 
+  c = ctx; 
+  portEXIT_CRITICAL(&ctxMux);
+  
+  String s;
+  s.reserve(512);
+  
+  s = "{";
   s += "\"rx\":";            s += String(rxFrames);
   s += ",\"echo\":";         s += String(echoCount);
   s += ",\"txOk\":";         s += String(txOk);
@@ -531,8 +608,11 @@ static String statsToJson() {
   unsigned long now = millis();
   s += ",\"apStaleMs\":";    s += String((c.lastApStateMs == 0) ? 999999 : (now - c.lastApStateMs));
   s += ",\"stStaleMs\":";    s += String((c.lastSteeringMs == 0) ? 999999 : (now - c.lastSteeringMs));
-  twai_status_info_t st; twai_get_status_info(&st);
-  s += ",\"canState\":";     s += String((int)st.state);
+  
+  twai_status_info_t st; 
+  if (twai_get_status_info(&st) == ESP_OK) {
+    s += ",\"canState\":";     s += String((int)st.state);
+  }
   s += "}";
   return s;
 }
@@ -547,21 +627,60 @@ static void httpSetMode() {
   if      (m == 1) cfgDefaultsModeB(nc);
   else if (m == 2) cfgDefaultsModeC(nc);
   else             cfgDefaultsModeA(nc);
-  portENTER_CRITICAL(&cfgMux); cfg = nc; portEXIT_CRITICAL(&cfgMux);
+  
+  portENTER_CRITICAL(&cfgMux); 
+  cfg = nc; 
+  portEXIT_CRITICAL(&cfgMux);
+  
   cfgSave();
   server.send(200, "application/json", cfgToJson());
 }
 
 static void httpUpdate() {
   Config nc;
-  portENTER_CRITICAL(&cfgMux); nc = cfg; portEXIT_CRITICAL(&cfgMux);
-  if (server.hasArg("enabled"))    nc.enabled   = (server.arg("enabled") == "1");
-  if (server.hasArg("targetId"))   nc.targetId  = (uint16_t)strtol(server.arg("targetId").c_str(), nullptr, 0);
-  if (server.hasArg("hoRatePct"))  nc.hoRatePct = (uint8_t)server.arg("hoRatePct").toInt();
-  if (server.hasArg("burstMs"))    nc.burstMs   = (uint16_t)server.arg("burstMs").toInt();
-  if (server.hasArg("pauseMs"))    nc.pauseMs   = (uint16_t)server.arg("pauseMs").toInt();
-  if (server.hasArg("apStateId"))  nc.apStateId = (uint16_t)strtol(server.arg("apStateId").c_str(), nullptr, 0);
-  if (server.hasArg("steeringId")) nc.steeringId= (uint16_t)strtol(server.arg("steeringId").c_str(), nullptr, 0);
+  portENTER_CRITICAL(&cfgMux); 
+  nc = cfg; 
+  portEXIT_CRITICAL(&cfgMux);
+  
+  if (server.hasArg("enabled"))    
+    nc.enabled = (server.arg("enabled") == "1");
+    
+  if (server.hasArg("targetId")) {
+    char* endptr;
+    long val = strtol(server.arg("targetId").c_str(), &endptr, 0);
+    if (*endptr == '\0' && val > 0 && val <= 0x7FF) 
+      nc.targetId = (uint16_t)val;
+  }
+  
+  if (server.hasArg("hoRatePct")) {
+    int val = server.arg("hoRatePct").toInt();
+    if (val >= 0 && val <= 100) nc.hoRatePct = (uint8_t)val;
+  }
+  
+  if (server.hasArg("burstMs")) {
+    int val = server.arg("burstMs").toInt();
+    if (val >= 50 && val <= 10000) nc.burstMs = (uint16_t)val;
+  }
+  
+  if (server.hasArg("pauseMs")) {
+    int val = server.arg("pauseMs").toInt();
+    if (val >= 0 && val <= 10000) nc.pauseMs = (uint16_t)val;
+  }
+  
+  if (server.hasArg("apStateId")) {
+    char* endptr;
+    long val = strtol(server.arg("apStateId").c_str(), &endptr, 0);
+    if (*endptr == '\0' && val > 0 && val <= 0x7FF) 
+      nc.apStateId = (uint16_t)val;
+  }
+  
+  if (server.hasArg("steeringId")) {
+    char* endptr;
+    long val = strtol(server.arg("steeringId").c_str(), &endptr, 0);
+    if (*endptr == '\0' && val > 0 && val <= 0x7FF) 
+      nc.steeringId = (uint16_t)val;
+  }
+  
   if (server.hasArg("count")) {
     uint8_t n = (uint8_t)server.arg("count").toInt();
     if (n > MAX_TORQUE_ENTRIES) n = MAX_TORQUE_ENTRIES;
@@ -569,33 +688,60 @@ static void httpUpdate() {
     for (uint8_t i = 0; i < n; i++) {
       String k2 = "b2_" + String(i);
       String k3 = "b3_" + String(i);
-      if (server.hasArg(k2)) nc.torqueB2[i] = (uint8_t)strtol(server.arg(k2).c_str(), nullptr, 0);
-      if (server.hasArg(k3)) nc.torqueB3[i] = (uint8_t)strtol(server.arg(k3).c_str(), nullptr, 0);
+      if (server.hasArg(k2)) {
+        char* endptr;
+        long val = strtol(server.arg(k2).c_str(), &endptr, 0);
+        if (*endptr == '\0' && val >= 0 && val <= 255)
+          nc.torqueB2[i] = (uint8_t)val;
+      }
+      if (server.hasArg(k3)) {
+        char* endptr;
+        long val = strtol(server.arg(k3).c_str(), &endptr, 0);
+        if (*endptr == '\0' && val >= 0 && val <= 255)
+          nc.torqueB3[i] = (uint8_t)val;
+      }
     }
     nc.torqueCount = n;
   }
+  
   cfgClampAll(nc);
-  portENTER_CRITICAL(&cfgMux); cfg = nc; portEXIT_CRITICAL(&cfgMux);
+  portENTER_CRITICAL(&cfgMux); 
+  cfg = nc; 
+  portEXIT_CRITICAL(&cfgMux);
   cfgSave();
   server.send(200, "application/json", cfgToJson());
 }
 
 static void httpReset() {
-  Config nc; cfgDefaultsModeA(nc);
-  portENTER_CRITICAL(&cfgMux); cfg = nc; portEXIT_CRITICAL(&cfgMux);
+  Config nc; 
+  cfgDefaultsModeA(nc);
+  portENTER_CRITICAL(&cfgMux); 
+  cfg = nc; 
+  portEXIT_CRITICAL(&cfgMux);
   cfgSave();
   rxFrames = echoCount = txOk = txFail = 0;
   server.send(200, "application/json", cfgToJson());
 }
 
 static void webTask(void* arg) {
+  Serial.println("WiFi: Starting AP...");
+  
   WiFi.mode(WIFI_AP);
-  uint8_t mac[6]; WiFi.softAPmacAddress(mac);
+  WiFi.disconnect(true);
+  delay(100);
+  
+  uint8_t mac[6]; 
+  WiFi.softAPmacAddress(mac);
   char ssid[24];
-  snprintf(ssid, sizeof(ssid), "NagKiller-%02X%02X", mac[4], mac[5]);
-  WiFi.softAP(ssid, "nagkiller");
+  snprintf(ssid, sizeof(ssid), "Setup-%02X%02X", mac[4], mac[5]);
+  
+  if (!WiFi.softAP(ssid, "12345678")) {
+    Serial.println("WiFi: Failed to start AP!");
+    return;
+  }
+  
   IPAddress ip = WiFi.softAPIP();
-  Serial.printf("AP: SSID=%s PASS=nagkiller IP=%s\n", ssid, ip.toString().c_str());
+  Serial.printf("AP: SSID=%s IP=%s\n", ssid, ip.toString().c_str());
 
   server.on("/",           HTTP_GET,  httpRoot);
   server.on("/api/config", HTTP_GET,  httpConfig);
@@ -611,33 +757,62 @@ static void webTask(void* arg) {
   }
 }
 
-// ── Setup ───────────────────────────────────────────────────────
 void setup() {
   bootTime = millis();
   Serial.begin(115200);
-  delay(500);
+  delay(1500);  // CHANGED: Was 500ms, now 1500ms
+  
+  esp_reset_reason_t reset_reason = esp_reset_reason();
+  Serial.printf("\n=== BOOT START ===\n");
+  Serial.printf("Reset reason: %d\n", reset_reason);
+  if (reset_reason == ESP_RST_BROWNOUT) {
+    Serial.println("WARNING: Brownout detected!");
+  }
+  
   Serial.printf("IDF version: %s\n", esp_get_idf_version());
+  Serial.printf("Injection delay: %u seconds\n", INJECTION_BOOT_DELAY_MS / 1000);
 
+  Serial.println("Loading config...");
   cfgLoad();
   cfgClampAll(cfg);
 
+  Serial.println("Initializing TWAI...");
   twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
       (gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN, TWAI_MODE_NORMAL);
-  g.rx_queue_len = 64;
+  g.rx_queue_len = 256;
   g.tx_queue_len = 16;
   twai_timing_config_t t = TWAI_TIMING_CONFIG_500KBITS();
   twai_filter_config_t f = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
   esp_err_t err1 = twai_driver_install(&g, &t, &f);
   esp_err_t err2 = twai_start();
-  Serial.printf("twai_driver_install=%d twai_start=%d\n", (int)err1, (int)err2);
+  Serial.printf("TWAI: %s / %s\n", esp_err_to_name(err1), esp_err_to_name(err2));
+    
+  // CHANGED: Reboot instead of freeze on TWAI fail
+  if (err1 != ESP_OK || err2 != ESP_OK) {
+    Serial.println("TWAI init failed! Rebooting...");
+    delay(3000);
+    ESP.restart();
+  }
+  
+  delay(100);
 
-  Serial.println("=== nag_echo v2 ===");
-  Serial.printf("mode=%u id=0x%03X torqueCount=%u burst/pause=%u/%u ms enabled=%u\n",
-    cfg.mode, cfg.targetId, cfg.torqueCount, cfg.burstMs, cfg.pauseMs, cfg.enabled);
+  Serial.printf("mode=%u id=0x%03X torqueCount=%u enabled=%u\n",
+    cfg.mode, cfg.targetId, cfg.torqueCount, cfg.enabled);
 
-  xTaskCreatePinnedToCore(canTask, "can", 4096, nullptr, 5, nullptr, 1);
-  xTaskCreatePinnedToCore(webTask, "web", 8192, nullptr, 1, nullptr, 0);
+  Serial.println("Creating tasks...");
+  
+  BaseType_t ret1 = xTaskCreatePinnedToCore(canTask, "can", 8192, nullptr, 5, nullptr, 1);
+  BaseType_t ret2 = xTaskCreatePinnedToCore(webTask, "web", 8192, nullptr, 1, nullptr, 0);
+  
+  if (ret1 != pdPASS || ret2 != pdPASS) {
+    Serial.printf("Task creation failed: %d/%d\n", ret1, ret2);
+    while(1) { delay(1000); }
+  }
+  
+  Serial.println("BOOT OK");
 }
 
-void loop() { vTaskDelay(pdMS_TO_TICKS(1000)); }
+void loop() { 
+  vTaskDelay(pdMS_TO_TICKS(1000)); 
+}

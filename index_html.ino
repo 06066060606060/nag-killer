@@ -1,8 +1,3 @@
-// Single-page dashboard served from flash (PROGMEM) — no CDN, no SPIFFS.
-// Plain HTML+CSS+JS, polls /api/stats every 500 ms.
-//
-// To regenerate: edit the raw HTML between R"HTML(...)HTML" delimiters.
-
 const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 <html lang="en">
 <head>
@@ -88,7 +83,7 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       <div class="stat"><div class="k">uptime</div><div class="v" id="s_up">&mdash;</div></div>
     </div>
     <div class="tbar">
-      <button id="toggle">Disable</button>
+      <button id="toggle" disabled>Disable</button>
     </div>
   </section>
 
@@ -146,7 +141,7 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       </div>
     </details>
     <div class="tbar" style="margin-top:14px">
-      <button id="apply" class="primary" style="margin-left:auto">Apply all overrides</button>
+      <button id="apply" class="primary" style="margin-left:auto" disabled>Apply all overrides</button>
     </div>
     <div style="font-size:11px;color:var(--muted);margin-top:8px">
       Hard cap: torque clamped to &plusmn;1.80&nbsp;Nm in firmware.
@@ -167,10 +162,14 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 <script>
 const $ = id => document.getElementById(id);
 let cfg = null;
+let isLoading = false;
 
 function showToast(msg) {
-  const t = $('toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(showToast._h); showToast._h = setTimeout(()=>t.classList.remove('show'), 1500);
+  const t = $('toast'); 
+  t.textContent = msg; 
+  t.classList.add('show');
+  clearTimeout(showToast._h); 
+  showToast._h = setTimeout(() => t.classList.remove('show'), 1500);
 }
 
 function nmFromBytes(b2, b3) {
@@ -179,19 +178,25 @@ function nmFromBytes(b2, b3) {
 }
 
 function renderTorque() {
-  const tb = $('tq_tbody'); tb.innerHTML = '';
+  if (!cfg || !cfg.torque) return;
+  const tb = $('tq_tbody'); 
+  tb.innerHTML = '';
+  
   cfg.torque.forEach((t, i) => {
     const tr = document.createElement('tr');
+    const b2Hex = '0x' + t.b2.toString(16).padStart(2,'0').toUpperCase();
+    const b3Hex = '0x' + t.b3.toString(16).padStart(2,'0').toUpperCase();
     tr.innerHTML = `<td>${i}</td>
-      <td><input type="text" data-i="${i}" data-k="b2" value="0x${t.b2.toString(16).padStart(2,'0').toUpperCase()}"></td>
-      <td><input type="text" data-i="${i}" data-k="b3" value="0x${t.b3.toString(16).padStart(2,'0').toUpperCase()}"></td>
+      <td><input type="text" data-i="${i}" data-k="b2" value="${b2Hex}"></td>
+      <td><input type="text" data-i="${i}" data-k="b3" value="${b3Hex}"></td>
       <td id="nm_${i}">${nmFromBytes(t.b2,t.b3).toFixed(2)}</td>`;
     tb.appendChild(tr);
   });
+  
   tb.querySelectorAll('input').forEach(inp => inp.addEventListener('input', e => {
     const i = +e.target.dataset.i, k = e.target.dataset.k;
     const v = parseInt(e.target.value, 16);
-    if (Number.isFinite(v)) {
+    if (Number.isFinite(v) && cfg && cfg.torque[i]) {
       cfg.torque[i][k] = v & 0xFF;
       $(`nm_${i}`).textContent = nmFromBytes(cfg.torque[i].b2, cfg.torque[i].b3).toFixed(2);
     }
@@ -199,6 +204,8 @@ function renderTorque() {
 }
 
 function renderConfig() {
+  if (!cfg) return;
+  
   $('f_id').value    = '0x' + cfg.targetId.toString(16).toUpperCase().padStart(3,'0');
   $('f_apId').value  = '0x' + cfg.apStateId.toString(16).toUpperCase().padStart(3,'0');
   $('f_stId').value  = '0x' + cfg.steeringId.toString(16).toUpperCase().padStart(3,'0');
@@ -208,25 +215,53 @@ function renderConfig() {
   $('lbl_burst').textContent = cfg.burstMs;
   $('lbl_pause').textContent = cfg.pauseMs;
   $('toggle').textContent = cfg.enabled ? 'Disable' : 'Enable';
-  ['modeA','modeB','modeC'].forEach((id,m)=>$(id).classList.toggle('primary', cfg.mode === m));
+  
+  ['modeA','modeB','modeC'].forEach((id,m) => $(id).classList.toggle('primary', cfg.mode === m));
   $('modeC_panel').style.opacity = (cfg.mode === 2) ? '1' : '0.55';
+  
   renderTorque();
 }
 
 async function loadConfig() {
-  const r = await fetch('/api/config'); cfg = await r.json(); renderConfig();
+  try {
+    const r = await fetch('/api/config');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    cfg = await r.json();
+    renderConfig();
+    // Enable buttons now that config is loaded
+    $('toggle').disabled = false;
+    $('apply').disabled = false;
+    $('modeA').disabled = false;
+    $('modeB').disabled = false;
+    $('modeC').disabled = false;
+    $('modeR').disabled = false;
+    $('tq_add').disabled = false;
+    $('tq_del').disabled = false;
+  } catch(e) {
+    console.error('Failed to load config:', e);
+    $('state').textContent = 'config error';
+    $('state').className = 'pill bad';
+    // Retry after 2 seconds
+    setTimeout(loadConfig, 2000);
+  }
 }
 
 function freshTag(ms) {
-  if (ms == null) return ['—', 'warn'];
+  if (ms == null || ms === 999999) return ['stale', 'bad'];
   if (ms > 5000) return [(ms/1000).toFixed(1)+' s ago', 'bad'];
   if (ms > 1000) return [ms+' ms ago', 'warn'];
   return [ms+' ms ago', 'ok'];
 }
 
 async function tickStats() {
+  if (isLoading) return; // Prevent overlapping requests
+  
   try {
-    const r = await fetch('/api/stats'); const s = await r.json();
+    isLoading = true;
+    const r = await fetch('/api/stats');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const s = await r.json();
+    
     $('s_rx').textContent   = s.rx;
     $('s_echo').textContent = s.echo;
     $('s_tx').textContent   = s.txOk + ' / ' + s.txFail;
@@ -234,6 +269,7 @@ async function tickStats() {
     $('s_ho').textContent   = s.ho;
     $('s_tq').textContent   = (s.torque>=0?'+':'') + s.torque.toFixed(2) + ' Nm';
     $('s_inj').textContent  = (s.injNm>=0?'+':'') + s.injNm.toFixed(2) + ' Nm  ho=' + s.injHo;
+    
     const cs = ['running','recovering','off','stopped'][s.canState] || s.canState;
     $('s_cs').textContent   = cs;
     $('s_cs').className = 'v ' + (s.canState===0?'ok':s.canState===2?'bad':'warn');
@@ -242,6 +278,7 @@ async function tickStats() {
     $('state').className    = 'pill ok';
     $('s_en').textContent   = cfg && cfg.enabled ? 'YES' : 'NO';
     $('s_en').className     = 'v ' + (cfg && cfg.enabled ? 'ok' : 'warn');
+    
     // Mode C panel
     $('c_ap').textContent  = s.apState;
     $('c_ho').textContent  = s.handsOnState;
@@ -253,63 +290,119 @@ async function tickStats() {
   } catch(e) {
     $('state').textContent = 'lost';
     $('state').className   = 'pill bad';
+  } finally {
+    isLoading = false;
   }
 }
 
 async function setMode(m) {
-  const r = await fetch('/api/mode?m=' + m, { method: 'POST' });
-  cfg = await r.json(); renderConfig(); showToast('mode applied');
+  if (!cfg) { showToast('not ready'); return; }
+  try {
+    const r = await fetch('/api/mode?m=' + m, { method: 'POST' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    cfg = await r.json(); 
+    renderConfig(); 
+    showToast('mode applied');
+  } catch(e) {
+    showToast('error: ' + e.message);
+  }
 }
 
 async function applyOverrides() {
-  const id   = parseInt($('f_id').value, 16);
-  const apId = parseInt($('f_apId').value, 16);
-  const stId = parseInt($('f_stId').value, 16);
-  const ho   = +$('f_ho').value;
-  const burst= +$('f_burst').value;
-  const pause= +$('f_pause').value;
-  const params = new URLSearchParams();
-  if (Number.isFinite(id))   params.set('targetId',  String(id));
-  if (Number.isFinite(apId)) params.set('apStateId', String(apId));
-  if (Number.isFinite(stId)) params.set('steeringId',String(stId));
-  params.set('hoRatePct', String(ho));
-  params.set('burstMs',   String(burst));
-  params.set('pauseMs',   String(pause));
-  params.set('count', String(cfg.torque.length));
-  cfg.torque.forEach((t, i) => {
-    params.set('b2_' + i, String(t.b2));
-    params.set('b3_' + i, String(t.b3));
-  });
-  const r = await fetch('/api/update?' + params, { method: 'POST' });
-  cfg = await r.json(); renderConfig(); showToast('saved');
+  if (!cfg || !cfg.torque) { showToast('not ready'); return; }
+  
+  try {
+    const id   = parseInt($('f_id').value, 16);
+    const apId = parseInt($('f_apId').value, 16);
+    const stId = parseInt($('f_stId').value, 16);
+    const ho   = +$('f_ho').value;
+    const burst= +$('f_burst').value;
+    const pause= +$('f_pause').value;
+    
+    // Validate inputs
+    if (!Number.isFinite(id) || !Number.isFinite(apId) || !Number.isFinite(stId)) {
+      showToast('invalid hex ID');
+      return;
+    }
+    
+    const params = new URLSearchParams();
+    params.set('targetId',  String(id));
+    params.set('apStateId', String(apId));
+    params.set('steeringId',String(stId));
+    params.set('hoRatePct', String(ho));
+    params.set('burstMs',   String(burst));
+    params.set('pauseMs',   String(pause));
+    params.set('count', String(cfg.torque.length));
+    
+    cfg.torque.forEach((t, i) => {
+      params.set('b2_' + i, String(t.b2));
+      params.set('b3_' + i, String(t.b3));
+    });
+    
+    const r = await fetch('/api/update?' + params, { method: 'POST' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    cfg = await r.json(); 
+    renderConfig(); 
+    showToast('saved');
+  } catch(e) {
+    showToast('error: ' + e.message);
+  }
 }
+
+// Initialize button states (disabled until config loads)
+$('modeA').disabled = true;
+$('modeB').disabled = true;
+$('modeC').disabled = true;
+$('modeR').disabled = true;
+$('tq_add').disabled = true;
+$('tq_del').disabled = true;
 
 $('modeA').onclick  = () => setMode(0);
 $('modeB').onclick  = () => setMode(1);
 $('modeC').onclick  = () => setMode(2);
 $('modeR').onclick  = async () => {
+  if (!cfg) { showToast('not ready'); return; }
   if (!confirm('Reset all settings to Mode A defaults?')) return;
-  const r = await fetch('/api/reset', { method:'POST' });
-  cfg = await r.json(); renderConfig(); showToast('reset');
-};
-$('apply').onclick  = applyOverrides;
-$('toggle').onclick = () => {
-  const params = new URLSearchParams({ enabled: cfg.enabled ? '0' : '1' });
-  fetch('/api/update?' + params, { method:'POST' }).then(r=>r.json()).then(c=>{
-    cfg = c; renderConfig(); showToast(cfg.enabled ? 'enabled' : 'disabled');
-  });
-};
-$('tq_add').onclick = () => {
-  if (cfg.torque.length >= 8) { showToast('max 8 entries'); return; }
-  cfg.torque.push({ b2: 0x08, b3: 0xB6, nm: 1.80 });
-  renderTorque();
-};
-$('tq_del').onclick = () => {
-  if (cfg.torque.length <= 1) { showToast('min 1 entry'); return; }
-  cfg.torque.pop(); renderTorque();
+  try {
+    const r = await fetch('/api/reset', { method:'POST' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    cfg = await r.json(); 
+    renderConfig(); 
+    showToast('reset');
+  } catch(e) {
+    showToast('error: ' + e.message);
+  }
 };
 
-loadConfig().then(() => { tickStats(); setInterval(tickStats, 500); });
+$('apply').onclick  = applyOverrides;
+$('toggle').onclick = () => {
+  if (!cfg) { showToast('not ready'); return; }
+  const params = new URLSearchParams({ enabled: cfg.enabled ? '0' : '1' });
+  fetch('/api/update?' + params, { method:'POST' })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(c => { cfg = c; renderConfig(); showToast(cfg.enabled ? 'enabled' : 'disabled'); })
+    .catch(e => showToast('error: ' + e.message));
+};
+
+$('tq_add').onclick = () => {
+  if (!cfg || !cfg.torque) return;
+  if (cfg.torque.length >= 8) { showToast('max 8 entries'); return; }
+  cfg.torque.push({ b2: 0x08, b3: 0xB6 });
+  renderTorque();
+};
+
+$('tq_del').onclick = () => {
+  if (!cfg || !cfg.torque) return;
+  if (cfg.torque.length <= 1) { showToast('min 1 entry'); return; }
+  cfg.torque.pop(); 
+  renderTorque();
+};
+
+// Start
+loadConfig().then(() => { 
+  tickStats(); 
+  setInterval(tickStats, 500); 
+});
 </script>
 </body>
 </html>
