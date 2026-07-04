@@ -410,9 +410,13 @@ Do not assume a successful compile means the system is safe.
 
 #### Hardware
 
-- Adapted for ESP32-S3-WROOM-1
+- ESP32-S3-WROOM-1
 - Documented SN65HVD230 wiring
 - Set CAN RX/TX pins to GPIO 4 and GPIO 5
+
+- AtomS3 lite ESP32-S3
+- ATOMIC CANBus Base (CA-IS3050G)
+- Set CAN RX/TX pins to GPIO 5 and GPIO 6
 
 ---
 
