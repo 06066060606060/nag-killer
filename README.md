@@ -27,8 +27,6 @@ This fork includes fixes and improvements around:
 
 ## Hardware Target
 
-This fork was adapted for:
-
 | Part | Device | Device |
 |---|---|---|
 | Microcontroller | ESP32-S3-WROOM-1 | AtomS3 Lite ESP32S3 |
