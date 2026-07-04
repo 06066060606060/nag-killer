@@ -27,14 +27,16 @@ This fork includes fixes and improvements around:
 
 ## Hardware Target
 
+This fork was adapted for:
+
 | Part | Device | Device |
 |---|---|---|
 | Microcontroller | ESP32-S3-WROOM-1 | AtomS3 Lite ESP32S3 |
 | CAN Transceiver | SN65HVD230 3.3V module | ATOMIC CANBus Base (CA-IS3050G) |
 | CAN RX | GPIO 4 | GPIO 5 |
 | CAN TX | GPIO 5 | GPIO 6 |
-| CAN Bus | 500 kbps CAN |
-| Power | USB-C or stable 5V supply |
+| CAN Bus | 500 kbps CAN | 500 kbps CAN |
+| Power | USB-C or stable 5V supply | USB-C or stable 5V supply |
 
 ### Pin Definitions
 
@@ -43,7 +45,7 @@ This fork includes fixes and improvements around:
 #define CAN_TX_PIN 5
 ```
 
-### Basic Wiring
+### Basic Wiring for SN65HVD230
 
 ```text
 ESP32-S3 GPIO 5  ->  SN65HVD230 TXD
