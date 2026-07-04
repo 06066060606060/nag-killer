@@ -1,4 +1,4 @@
-# nag-killer ESP32-S3 Stability Fork
+# nag-killer ESP32-S3
 
 > ⚠️ Research / educational firmware only.
 >
