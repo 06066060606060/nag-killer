@@ -1,18 +1,19 @@
-# nag-killer ESP32-S3
+# nag-killer ESP32-S3 V3
 
 > ⚠️ Research / educational firmware only.
 >
 > This project interacts with a vehicle CAN bus. It is intended for controlled bench testing, code review, and research environments only. Do not use this on public roads or in any situation where unsafe behavior could put people or property at risk. You are responsible for your own testing, wiring, configuration, and local laws.
 
-This fork is based on the original `nag-killer` project and focuses on stability, error handling, dashboard reliability, CAN frame validation, and ESP32-S3 hardware adaptation.
+Update by shubh2294.
+This update is based on the original `nag-killer` project and focuses on stability, error handling, dashboard reliability, CAN frame validation, and ESP32-S3 hardware adaptation.
 
-The goal of this fork is not to blindly rewrite the original project. The goal is to make the code easier to test, easier to debug, and less likely to hang or silently fail during controlled CAN research.
+The goal of this update is not to blindly rewrite the original project. The goal is to make the code easier to test, easier to debug, and less likely to hang or silently fail during controlled CAN research.
 
 ---
 
 ## What This Fork Changes
 
-This fork includes fixes and improvements around:
+This update includes fixes and improvements around:
 
 - CAN message length validation
 - TWAI startup and failure handling
@@ -413,7 +414,7 @@ Do not assume a successful compile means the system is safe.
 - ESP32-S3-WROOM-1
 - Documented SN65HVD230 wiring
 - Set CAN RX/TX pins to GPIO 4 and GPIO 5
-
+-
 - AtomS3 lite ESP32-S3
 - ATOMIC CANBus Base (CA-IS3050G)
 - Set CAN RX/TX pins to GPIO 5 and GPIO 6
