@@ -31,7 +31,7 @@ This fork was adapted for:
 
 | Part | Details |
 |---|---|
-| Microcontroller | ESP32-S3-WROOM-1 | AtomS3 Lite ESP32S3 Dev Kit |
+| Microcontroller | ESP32-S3-WROOM-1 | AtomS3 Lite ESP32S3 |
 | CAN Transceiver | SN65HVD230 3.3V module | ATOMIC CANBus Base (CA-IS3050G) |
 | CAN RX | GPIO 4 |  GPIO 5 |
 | CAN TX | GPIO 5 |  GPIO 6 |
