@@ -29,14 +29,14 @@ This fork includes fixes and improvements around:
 
 This fork was adapted for:
 
-| Part | Device | Device |
-|---|---|---|
-| Microcontroller | ESP32-S3-WROOM-1 | AtomS3 Lite ESP32S3 |
-| CAN Transceiver | SN65HVD230 3.3V module | ATOMIC CANBus Base (CA-IS3050G) |
-| CAN RX | GPIO 4 | GPIO 5 |
-| CAN TX | GPIO 5 | GPIO 6 |
-| CAN Bus | 500 kbps CAN | 500 kbps CAN |
-| Power | USB-C or stable 5V supply | USB-C or stable 5V supply |
+| Part            | Device                    | Device                          |
+| --------------- | ------------------------- | ------------------------------- |
+| Microcontroller | ESP32-S3-WROOM-1          | AtomS3 Lite ESP32S3             |
+| CAN Transceiver | SN65HVD230 3.3V module    | ATOMIC CANBus Base (CA-IS3050G) |
+| CAN RX          | GPIO 4                    | GPIO 5                          |
+| CAN TX          | GPIO 5                    | GPIO 6                          |
+| CAN Bus         | 500 kbps CAN              | 500 kbps CAN                    |
+| Power           | USB-C or stable 5V supply | USB-C or stable 5V supply       |
 
 ### Pin Definitions
 
@@ -302,13 +302,13 @@ The dashboard exposes a local WiFi/web interface for configuration and live stat
 
 Common endpoints:
 
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/` | GET | Main dashboard |
-| `/api/config` | GET | Current configuration |
-| `/api/stats` | GET | Live runtime stats |
-| `/api/update` | POST/GET | Update settings |
-| `/api/reset` | POST/GET | Reset config |
+| Endpoint      | Method   | Purpose               |
+| ------------- | -------- | --------------------- |
+| `/`           | GET      | Main dashboard        |
+| `/api/config` | GET      | Current configuration |
+| `/api/stats`  | GET      | Live runtime stats    |
+| `/api/update` | POST/GET | Update settings       |
+| `/api/reset`  | POST/GET | Reset config          |
 
 ---
 
@@ -316,12 +316,12 @@ Common endpoints:
 
 Dashboard CAN state labels were corrected to match ESP-IDF TWAI state ordering:
 
-| Value | State |
-|---|---|
-| 0 | Stopped |
-| 1 | Running |
-| 2 | Bus-off |
-| 3 | Recovering |
+| Value | State      |
+| ----- | ---------- |
+| 0     | Stopped    |
+| 1     | Running    |
+| 2     | Bus-off    |
+| 3     | Recovering |
 
 ---
 
