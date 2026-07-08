@@ -1,3 +1,4 @@
+
 # nag-killer ESP32-S3 V3
 
 > ⚠️ Research / educational firmware only.
@@ -30,14 +31,12 @@ This update includes fixes and improvements around:
 
 This fork was adapted for:
 
-| Part            | Device                    | Device                          |
-| --------------- | ------------------------- | ------------------------------- |
-| Microcontroller | ESP32-S3-WROOM-1          | AtomS3 Lite ESP32S3             |
-| CAN Transceiver | SN65HVD230 3.3V module    | ATOMIC CANBus Base (CA-IS3050G) |
-| CAN RX          | GPIO 4                    | GPIO 5                          |
-| CAN TX          | GPIO 5                    | GPIO 6                          |
-| CAN Bus         | 500 kbps CAN              | 500 kbps CAN                    |
-| Power           | USB-C or stable 5V supply | USB-C or stable 5V supply       |
+| Device                       | Can Transceiver                 | CAN RX / CAN TX   | Can Bus      | Power                     |
+| ---------------------------- | ------------------------------- | ----------------- | ------------ | ------------------------- |
+| ESP32-S3-WROOM-1             | SN65HVD230 3.3V module          | GPIO 4 / GPIO 5   | 500 kbps CAN | USB-C or stable 5V supply |
+| AtomS3 Lite ESP32S3          | ATOMIC CANBus Base (CA-IS3050G) | GPIO 5 / GPIO 6   | 500 kbps CAN | USB-C or stable 5V supply |
+| Waveshare ESP32-S3-RS485-CAN | SIT1050T                        | GPIO 15 / GPIO 16 | 500 kbps CAN | USB-C or 7-36V supply     |
+
 
 ### Pin Definitions
 
