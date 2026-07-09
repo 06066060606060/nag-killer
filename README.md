@@ -1,4 +1,3 @@
-
 # nag-killer ESP32-S3 V3
 
 > ⚠️ Research / educational firmware only.
