@@ -61,6 +61,9 @@ Note: Some vehicle CAN networks already include termination. Do not add terminat
 
 The dashboard exposes a local WiFi/web interface for configuration and live status.
 
+SSID: Setup-%%%%  
+Password: 12345678
+ 
 Common endpoints:
 
 | Endpoint      | Method   | Purpose               |
