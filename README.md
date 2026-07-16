@@ -3,9 +3,6 @@
 > ⚠️ Research / educational firmware only.
 >
 > This project interacts with a vehicle CAN bus. It is intended for controlled bench testing, code review, and research environments only. Do not use this on public roads or in any situation where unsafe behavior could put people or property at risk. You are responsible for your own testing, wiring, configuration, and local laws.
-
-Update by shubh2294.
-This update is based on the original `nag-killer` project and focuses on stability, error handling, dashboard reliability, CAN frame validation, and ESP32-S3 hardware adaptation.
 ---
 
 ## What This Update Changes
@@ -138,5 +135,6 @@ Do not use this software unless you understand the risks of automotive CAN bus m
 ## Credits
 
 - Original project: `06066060606060/nag-killer`
+- Update by shubh2294.
 - ESP32 TWAI driver by Espressif Systems
 - Automotive CAN research community
