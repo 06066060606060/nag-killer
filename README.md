@@ -135,6 +135,6 @@ Do not use this software unless you understand the risks of automotive CAN bus m
 ## Credits
 
 - Original project: `06066060606060/nag-killer`
-- Update by shubh2294.
+- Update by shubh2294. PlatformIO fork  https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review
 - ESP32 TWAI driver by Espressif Systems
 - Automotive CAN research community
