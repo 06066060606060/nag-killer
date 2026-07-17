@@ -58,7 +58,7 @@ Note: Some vehicle CAN networks already include termination. Do not add terminat
 
 The dashboard exposes a local WiFi/web interface for configuration and live status.
 
-SSID: Setup-%%%%  
+SSID: Setup-XXXX  
 Password: 12345678
  
 Common endpoints:
@@ -100,7 +100,7 @@ Required libraries are standard Arduino/ESP32 libraries such as:
 
 ## Testing Notes
 
-- Confirmed working on Model Y HW4 Firmware 2026.20.6.1
+- Confirmed working on Tesla Model Y HW4 Firmware 2026.20.6.1
 
 Before any live vehicle testing, validate behavior in the safest possible way:
 
