@@ -18,7 +18,7 @@
 #include <nvs_flash.h>
 #include <esp_system.h>
 #include "driver/twai.h"
-#include "index_html.h"
+
 
 #define CAN_TX_PIN    5
 #define CAN_RX_PIN    4
