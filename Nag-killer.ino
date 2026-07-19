@@ -1,6 +1,6 @@
 /*
     ================================================================
-    nag_echo v2 — runtime-configurable CAN counter-echo
+    nag_echo v3 — runtime-configurable CAN counter-echo
                    with on-board WiFi dashboard
     ================================================================
 
@@ -8,7 +8,7 @@
     Hard safety cap: torque is clamped to ±1.80 Nm in firmware,
     cannot be overridden from the dashboard.
 
-    Hardware: ESP32S3 + SN65HVD230
+
 */
 
 #include <Arduino.h>
@@ -18,10 +18,10 @@
 #include <nvs_flash.h>
 #include <esp_system.h>
 #include "driver/twai.h"
-
+#include "index_html.h"
 
 #define CAN_TX_PIN    5
-#define CAN_RX_PIN    4
+#define CAN_RX_PIN    6
 
 // ── Safety hard caps (NOT user-overridable) ─────────────────────
 static const uint16_t TORQUE_RAW_MAX = 0x8B6;
@@ -30,8 +30,9 @@ static const float    TORQUE_NM_MAX  = +1.80f;
 static const float    TORQUE_NM_MIN  = -1.80f;
 static const uint8_t  MAX_TORQUE_ENTRIES = 8;
 
-// ADDED: 15-second injection delay
-static const unsigned long INJECTION_BOOT_DELAY_MS = 15000;
+// ── Timing constants ────────────────────────────────────────────
+static const unsigned long DRIVER_WAKE_DELAY_MS = 10000;  // #1: Before CAN init
+static const unsigned long INJECTION_DELAY_MS = 15000;    // After CAN init
 
 // ── Modes ───────────────────────────────────────────────────────
 enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_C = 2, MODE_CUSTOM = 3 };
@@ -91,14 +92,42 @@ static volatile float    realTorque  = 0;
 static volatile uint8_t  lastInjectedHo = 0;
 static volatile float    lastInjectedNm = 0;
 static unsigned long bootTime = 0;
+static unsigned long canInitTime = 0;  // When TWAI actually started
+static volatile bool twaiReady = false;  // True only after TWAI starts cleanly
 
 static volatile uint32_t canAnyFrames = 0;
+static volatile unsigned long lastCanFrameMs = 0;  // Last time any CAN frame was received
 static unsigned long lastCanLogMs = 0;
 static unsigned long lastStatusLog = 0;
+static unsigned long lastNoCanWarn = 0;  // #2: For log throttling
+static unsigned long lastTxFailLog = 0;  // Throttle TX fail logs
+
+// ── Heartbeat counters (#4) ─────────────────────────────────────
+static volatile uint32_t canBeat = 0;
+static volatile uint32_t canRxBeat = 0;
+static volatile uint32_t webBeat = 0;
+
+// ── RTC boot count (#5) ─────────────────────────────────────────
+RTC_DATA_ATTR uint32_t rtcBootCount = 0;
+
+static const char* resetReasonName(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:   return "POWERON";
+    case ESP_RST_EXT:       return "EXTERNAL_RESET";
+    case ESP_RST_SW:        return "SOFTWARE_RESET";
+    case ESP_RST_PANIC:     return "PANIC";
+    case ESP_RST_INT_WDT:   return "INT_WDT";
+    case ESP_RST_TASK_WDT:  return "TASK_WDT";
+    case ESP_RST_WDT:       return "OTHER_WDT";
+    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "UNKNOWN";
+  }
+}
 
 // ── Persistence ─────────────────────────────────────────────────
 static Preferences prefs;
-static uint8_t lastMode = 0xFF;
 
 static void cfgSetCommonDefaults(Config& c) {
   c.enabled        = true;
@@ -223,7 +252,6 @@ static void cfgLoad() {
   prefs.end();
   
   cfgClampAll(cfg);
-  lastMode = cfg.mode;
   Serial.println("NVS: Config loaded OK");
 }
 
@@ -248,8 +276,7 @@ static void cfgSave() {
   prefs.putUShort("stid", cfg.steeringId);
   prefs.putUChar("v",     2);
   prefs.end();
-  
-  lastMode = cfg.mode;
+
 }
 
 static bool decideInjection(const twai_message_t& src,
@@ -277,11 +304,16 @@ static bool decideInjection(const twai_message_t& src,
   static uint8_t  tIdx = 0;
   static uint16_t hoSeq = 0;
   static uint32_t lastChangeMs = 0;
-  
-  if (mode != lastMode) {
+  static uint8_t  prevMode = 0xFF;
+
+  // Keep mode-change detection local to injection logic.
+  // The old global tracker was updated during cfgSave(), so live mode
+  // switches could be saved before this function ever saw the change.
+  if (mode != prevMode) {
     tIdx = 0;
     hoSeq = 0;
-    lastChangeMs = 0;
+    lastChangeMs = now;
+    prevMode = mode;
   }
 
   if (mode == MODE_A || mode == MODE_CUSTOM) {
@@ -388,6 +420,7 @@ static void echoModified(const twai_message_t& src) {
   e.data[7] = (uint8_t)((s + 0x73) & 0xFF);
 
   unsigned long t0 = micros();
+  // Keep original 2ms transmit wait; boot/power fixes should not change known-good TX behavior.
   esp_err_t err = twai_transmit(&e, pdMS_TO_TICKS(2));
   echoLatUs = micros() - t0;
   
@@ -398,12 +431,18 @@ static void echoModified(const twai_message_t& src) {
     uint16_t raw = ((b2 & 0x0F) << 8) | b3;
     lastInjectedNm = raw * 0.01f - 20.5f;
     
-//    Serial.printf("[TX] id=0x%03X data=%02X%02X%02X%02X%02X%02X%02X%02X t=%.2fNm\n",
-//     e.identifier, e.data[0], e.data[1], e.data[2], e.data[3],
-//      e.data[4], e.data[5], e.data[6], e.data[7], lastInjectedNm);
+    // Serial.printf("[TX] id=0x%03X data=%02X%02X%02X%02X%02X%02X%02X%02X t=%.2fNm\n",
+    //  e.identifier, e.data[0], e.data[1], e.data[2], e.data[3],
+    //  e.data[4], e.data[5], e.data[6], e.data[7], lastInjectedNm);
   } else {
     txFail++;
-    Serial.printf("[TX FAIL] %s\n", esp_err_to_name(err));
+    unsigned long now = millis();
+    if (now - lastTxFailLog >= 2000) {
+      lastTxFailLog = now;
+      Serial.printf("[TX FAIL] %s total=%lu\n",
+                    esp_err_to_name(err),
+                    (unsigned long)txFail);
+    }
   }
 }
 
@@ -464,18 +503,24 @@ static void canTask(void* arg) {
   for (;;) {
     twai_message_t f;
     
-    // ADDED: Reboot if no CAN frames after 20 seconds
+    // #4: Heartbeat counter
+    canBeat++;
+    
+    // #2: Changed from reboot to log only every 5 seconds
     if ((millis() - bootTime) > 20000 && canAnyFrames == 0) {
-      Serial.println("No CAN frames after 20 sec, rebooting...");
-      delay(1000);
-      ESP.restart();
+      if (millis() - lastNoCanWarn > 5000) {
+        Serial.println("No CAN frames yet, staying alive.");
+        lastNoCanWarn = millis();
+      }
     }
     
     while (twai_receive(&f, pdMS_TO_TICKS(2)) == ESP_OK) {
       canAnyFrames++;
+      canRxBeat++;
+      lastCanFrameMs = millis();
 
       unsigned long now = millis();
-      if (now - lastCanLogMs >= 1000) {
+      if (now - lastCanLogMs >= 10000) {
         Serial.printf("[CAN] total=%lu last_id=0x%03lX dlc=%u\n",
                       (unsigned long)canAnyFrames,
                       (unsigned long)f.identifier,
@@ -518,10 +563,11 @@ static void canTask(void* arg) {
         portEXIT_CRITICAL(&cfgMux);
       }
 
-      // ADDED: 30-second injection delay
-      bool bootDelayPassed = (millis() - bootTime) >= INJECTION_BOOT_DELAY_MS;
+      // #8: Must see CAN before injection (>1000 frames AND delay passed)
+      bool bootDelayPassed = (millis() - canInitTime) >= INJECTION_DELAY_MS;
+      bool canSeen = canAnyFrames > 1000;
       
-      if (en && bootDelayPassed && !isOurs && ho <= 1) {
+      if (en && bootDelayPassed && canSeen && !isOurs && ho <= 1) {
         echoModified(f);
       }
     }
@@ -608,9 +654,15 @@ static String statsToJson() {
   unsigned long now = millis();
   s += ",\"apStaleMs\":";    s += String((c.lastApStateMs == 0) ? 999999 : (now - c.lastApStateMs));
   s += ",\"stStaleMs\":";    s += String((c.lastSteeringMs == 0) ? 999999 : (now - c.lastSteeringMs));
+  s += ",\"canAny\":";       s += String(canAnyFrames);
+  s += ",\"canAgeMs\":";     s += String((lastCanFrameMs == 0) ? 999999 : (now - lastCanFrameMs));
+  s += ",\"canBeat\":";      s += String(canBeat);
+  s += ",\"canRxBeat\":";    s += String(canRxBeat);
+  s += ",\"webBeat\":";      s += String(webBeat);
+  s += ",\"twaiReady\":";    s += (twaiReady ? "true" : "false");
   
   twai_status_info_t st; 
-  if (twai_get_status_info(&st) == ESP_OK) {
+  if (twaiReady && twai_get_status_info(&st) == ESP_OK) {
     s += ",\"canState\":";     s += String((int)st.state);
   }
   s += "}";
@@ -726,8 +778,9 @@ static void httpReset() {
 static void webTask(void* arg) {
   Serial.println("WiFi: Starting AP...");
   
-  WiFi.mode(WIFI_AP);
   WiFi.disconnect(true);
+  delay(100);
+  WiFi.mode(WIFI_AP);
   delay(100);
   
   uint8_t mac[6]; 
@@ -735,9 +788,10 @@ static void webTask(void* arg) {
   char ssid[24];
   snprintf(ssid, sizeof(ssid), "Setup-%02X%02X", mac[4], mac[5]);
   
-  if (!WiFi.softAP(ssid, "12345678")) {
-    Serial.println("WiFi: Failed to start AP!");
-    return;
+  // #6: Retry AP startup instead of dying
+  while (!WiFi.softAP(ssid, "12345678")) {
+    Serial.println("WiFi: Failed to start AP, retrying...");
+    vTaskDelay(pdMS_TO_TICKS(3000));
   }
   
   IPAddress ip = WiFi.softAPIP();
@@ -753,6 +807,7 @@ static void webTask(void* arg) {
 
   for (;;) {
     server.handleClient();
+    webBeat++;  // #4: Heartbeat
     vTaskDelay(1);
   }
 }
@@ -760,21 +815,40 @@ static void webTask(void* arg) {
 void setup() {
   bootTime = millis();
   Serial.begin(115200);
-  delay(1500);  // CHANGED: Was 500ms, now 1500ms
+  delay(1500);
+  
+  // #5: RTC boot count
+  rtcBootCount++;
   
   esp_reset_reason_t reset_reason = esp_reset_reason();
   Serial.printf("\n=== BOOT START ===\n");
-  Serial.printf("Reset reason: %d\n", reset_reason);
+  Serial.printf("Reset reason: %d (%s)\n", reset_reason, resetReasonName(reset_reason));
+  Serial.printf("RTC boot count: %lu\n", (unsigned long)rtcBootCount);
   if (reset_reason == ESP_RST_BROWNOUT) {
     Serial.println("WARNING: Brownout detected!");
   }
   
   Serial.printf("IDF version: %s\n", esp_get_idf_version());
-  Serial.printf("Injection delay: %u seconds\n", INJECTION_BOOT_DELAY_MS / 1000);
 
   Serial.println("Loading config...");
   cfgLoad();
   cfgClampAll(cfg);
+
+  Serial.printf("mode=%u id=0x%03X torqueCount=%u enabled=%u\n",
+    cfg.mode, cfg.targetId, cfg.torqueCount, cfg.enabled);
+
+  // Start dashboard first so the ESP is visible during the driver-wake delay.
+  Serial.println("Creating web task...");
+  BaseType_t ret2 = xTaskCreatePinnedToCore(webTask, "web", 8192, nullptr, 1, nullptr, 0);
+  if (ret2 != pdPASS) {
+    Serial.printf("Web task creation failed: %d\n", ret2);
+    delay(3000);
+    ESP.restart();
+  }
+
+  // #1: Driver-wake delay before touching CAN/TWAI.
+  Serial.println("Driver-wake power detected. Waiting 10 seconds before CAN init...");
+  delay(DRIVER_WAKE_DELAY_MS);
 
   Serial.println("Initializing TWAI...");
   twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
@@ -788,31 +862,55 @@ void setup() {
   esp_err_t err2 = twai_start();
   Serial.printf("TWAI: %s / %s\n", esp_err_to_name(err1), esp_err_to_name(err2));
     
-  // CHANGED: Reboot instead of freeze on TWAI fail
   if (err1 != ESP_OK || err2 != ESP_OK) {
     Serial.println("TWAI init failed! Rebooting...");
     delay(3000);
     ESP.restart();
   }
-  
+
+  // Record when CAN actually started (for injection delay calculation).
+  canInitTime = millis();
+  twaiReady = true;
   delay(100);
 
-  Serial.printf("mode=%u id=0x%03X torqueCount=%u enabled=%u\n",
-    cfg.mode, cfg.targetId, cfg.torqueCount, cfg.enabled);
-
-  Serial.println("Creating tasks...");
-  
+  Serial.println("Creating CAN task...");
   BaseType_t ret1 = xTaskCreatePinnedToCore(canTask, "can", 8192, nullptr, 5, nullptr, 1);
-  BaseType_t ret2 = xTaskCreatePinnedToCore(webTask, "web", 8192, nullptr, 1, nullptr, 0);
   
-  if (ret1 != pdPASS || ret2 != pdPASS) {
-    Serial.printf("Task creation failed: %d/%d\n", ret1, ret2);
-    while(1) { delay(1000); }
+  // #3: Reboot instead of freeze on task creation failure.
+  if (ret1 != pdPASS) {
+    Serial.printf("CAN task creation failed: %d\n", ret1);
+    delay(3000);
+    ESP.restart();
   }
   
   Serial.println("BOOT OK");
 }
 
-void loop() { 
-  vTaskDelay(pdMS_TO_TICKS(1000)); 
+// #4: Heartbeat logging in loop()
+void loop() {
+  static unsigned long lastBeatLog = 0;
+  static uint32_t loopBeat = 0;
+
+  loopBeat++;
+  unsigned long now = millis();
+
+  if (now - lastBeatLog >= 5000) {
+    lastBeatLog = now;
+    unsigned long canAgeMs = (lastCanFrameMs == 0) ? 999999 : (now - lastCanFrameMs);
+    Serial.printf(
+      "[BEAT] uptime=%lu loop=%lu canBeat=%lu canRxBeat=%lu webBeat=%lu canFrames=%lu canAgeMs=%lu txOk=%lu txFail=%lu heap=%u\n",
+      now / 1000,
+      (unsigned long)loopBeat,
+      (unsigned long)canBeat,
+      (unsigned long)canRxBeat,
+      (unsigned long)webBeat,
+      (unsigned long)canAnyFrames,
+      canAgeMs,
+      (unsigned long)txOk,
+      (unsigned long)txFail,
+      ESP.getFreeHeap()
+    );
+  }
+
+  vTaskDelay(pdMS_TO_TICKS(1000));
 }
