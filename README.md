@@ -1,4 +1,4 @@
-# Nag-killer ESP32-S3 V3
+# Nag-killer ESP32-S3
 
 > ⚠️ Research / educational firmware only.
 >
@@ -138,7 +138,8 @@ Do not use this software unless you understand the risks of automotive CAN bus m
 
 ---
 
-## PlatformIO Fork
+## PlatformIO Project
+
 https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review
 
 ## Credits
