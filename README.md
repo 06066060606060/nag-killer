@@ -99,8 +99,9 @@ Required libraries are standard Arduino/ESP32 libraries such as:
 ---
 
 ## Confirmed working
--  Tesla Model Y HW4 Firmware 2026.20.6.1 EAP (EU)
--  Tesla Model 3 Performance 2026 FSD (US)
+-  Tesla Model Y 2024 HW4 (EU) pin 2/3
+-  Tesla Model 3 Performance 2026 (US) pin 2/3
+-  Tesla Model S 2017 HW3/MCU2 (US) pin 13/14
 
 ## Know Bug
 - can state displaying "recovering" even if everything is working correctly
