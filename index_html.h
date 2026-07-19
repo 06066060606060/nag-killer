@@ -63,7 +63,7 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     </div>
     <div style="font-size:11px;color:var(--muted);line-height:1.55">
       <b>A</b>: CAN 0x370, fixed +1.80&nbsp;Nm, handsOn=1 always. Proven on MY 2022 HW3 pre-Juniper.<br>
-      <b>B</b>: CAN 0x052, 4-value torque cycle, time-bursty (<span id="lbl_burst">1000</span> ms inject / <span id="lbl_pause">1500</span> ms rest). Closer to the actual TSL6P device behaviour from sniff logs.<br>
+      <b>B</b>: Configurable target CAN ID, default 0x370, 4-value torque cycle, time-bursty (<span id="lbl_burst">1000</span> ms inject / <span id="lbl_pause">1500</span> ms rest). Closer to the actual TSL6P-style burst/pause behavior from sniff logs.<br>
       <b>C</b>: <a href="#" style="color:var(--muted)">@Linu</a>'s state machine on DAS_autopilotHandsOnState. Refuses to inject if context CAN frames are stale &gt;1&nbsp;s.
     </div>
   </section>
@@ -270,9 +270,9 @@ async function tickStats() {
     $('s_tq').textContent   = (s.torque>=0?'+':'') + s.torque.toFixed(2) + ' Nm';
     $('s_inj').textContent  = (s.injNm>=0?'+':'') + s.injNm.toFixed(2) + ' Nm  ho=' + s.injHo;
     
-    const cs = ['running','recovering','off','stopped'][s.canState] || s.canState;
-    $('s_cs').textContent   = cs;
-    $('s_cs').className = 'v ' + (s.canState===0?'ok':s.canState===2?'bad':'warn');
+    const cs = ['stopped','running','bus-off','recovering'][s.canState] || s.canState;
+    $('s_cs').textContent = cs;
+    $('s_cs').className = 'v ' + (s.canState===1?'ok':s.canState===2?'bad':'warn');
     $('s_up').textContent   = s.uptimeS + ' s';
     $('state').textContent  = 'connected';
     $('state').className    = 'pill ok';
