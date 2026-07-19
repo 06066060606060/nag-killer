@@ -60,8 +60,46 @@ The dashboard exposes a local WiFi/web interface for configuration and live stat
 
 SSID: Setup-XXXX  
 Password: 12345678
+
+## Modes (one click in the dashboard)
+
+### A — Simple
+CAN `0x370`, fixed `+1.80 Nm`, `handsOn=1` on every echoed frame. 
+
+### B — TSL6P (burst/pause)
+CAN `0x370`, torque cycles through `{+1.80, +1.50, −1.50, −1.80}` Nm,
+**bursty time pattern**: `1000 ms` of injection, `1500 ms` of rest by
+default (both configurable). Mirrors the actual TSL6P device behaviour
+observed in sniff logs — the rest periods are now believed to be the
+real reason TSL6P avoids detection on stricter firmware (per @JNP's
+re-analysis of the log).
+
+> **Why bursty, not probabilistic?** v2's first cut applied
+> `handsOn=1` on a fixed ~28 % of frames at random. Re-examination of
+> the TSL6P log shows it's actually `~1 s on, ~1.4–2.0 s off` — the
+> DAS-side detector is satisfied by the *rest period*, not by the
+> per-frame probability. v2 now reproduces the time pattern.
+
+### C — State machine (community algorithm by @Linu)
+
+Implements the gated state machine watches
+`DAS_autopilotHandsOnState` and only injects under tight conditions:
+
+- `DAS_autopilotState ∈ {3,4,5,6}` (AP active range)
+- `|SCCM_steeringAngle| ≤ 5°`
+- `handsOnState == 1` → never inject (mandatory rest)
+- `handsOnState == 2` → wait 2 s, then mild random-walk torque in the
+  range `±0.5 … ±1.8 Nm`, **opposite** the current steering angle
+- `handsOnState == 3` → wait 1 s, then sweep `−1.8 ↔ +1.8 Nm` in 1-s
+  cycles (Linu's original spec is `±2.0`; we cap at `±1.80` per the
+  pinned safety warning)
+
+**Safety net:** if no fresh frames are seen on the configured
+`apStateId` and `steeringId` within the last second, Mode C refuses
+to inject. So if the default CAN IDs (`0x399`, `0x129`) don't match
+your car's bus, the firmware safely no-ops instead of guessing.
  
-Common endpoints:
+## Common endpoints
 
 | Endpoint      | Method   | Purpose               |
 | ------------- | -------- | --------------------- |
