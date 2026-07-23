@@ -23,6 +23,9 @@
 #define CAN_TX_PIN    5
 #define CAN_RX_PIN    6
 
+// Active/désactive le log CAN → port série (format CSV)
+#define CAN_SERIAL_LOG 1
+
 // ── Safety hard caps (NOT user-overridable) ─────────────────────
 static const uint16_t TORQUE_RAW_MAX = 0x8B6;
 static const uint16_t TORQUE_RAW_MIN = 0x74E;
@@ -206,23 +209,23 @@ static void cfgClampAll(Config& c) {
 }
 
 static void cfgLoad() {
-  Serial.println("NVS: Loading config...");
+  //Serial.println("NVS: Loading config...");
   
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    Serial.println("NVS: Corrupted, erasing...");
+    //Serial.println("NVS: Corrupted, erasing...");
     ESP_ERROR_CHECK(nvs_flash_erase());
     err = nvs_flash_init();
   }
   
   if (err != ESP_OK) {
-    Serial.printf("NVS: Init failed %d, using defaults\n", err);
+    //Serial.printf("NVS: Init failed %d, using defaults\n", err);
     cfgDefaultsModeA(cfg);
     return;
   }
   
   if (!prefs.begin("nag", true)) {
-    Serial.println("NVS: No existing config, using defaults");
+    //Serial.println("NVS: No existing config, using defaults");
     cfgDefaultsModeA(cfg);
     return;
   }
@@ -252,14 +255,14 @@ static void cfgLoad() {
   prefs.end();
   
   cfgClampAll(cfg);
-  Serial.println("NVS: Config loaded OK");
+  //Serial.println("NVS: Config loaded OK");
 }
 
 static void cfgSave() {
   cfgClampAll(cfg);
   
   if (!prefs.begin("nag", false)) {
-    Serial.println("NVS: Save failed - could not open");
+    //Serial.println("NVS: Save failed - could not open");
     return;
   }
   
@@ -439,9 +442,9 @@ static void echoModified(const twai_message_t& src) {
     unsigned long now = millis();
     if (now - lastTxFailLog >= 2000) {
       lastTxFailLog = now;
-      Serial.printf("[TX FAIL] %s total=%lu\n",
-                    esp_err_to_name(err),
-                    (unsigned long)txFail);
+      //Serial.printf("[TX FAIL] %s total=%lu\n",
+      //              esp_err_to_name(err),
+      //              (unsigned long)txFail);
     }
   }
 }
@@ -499,6 +502,33 @@ static void updateSteering(const twai_message_t& f) {
   portEXIT_CRITICAL(&ctxMux);
 }
 
+#if CAN_SERIAL_LOG
+// ── Log CAN → port série ───────────────────────────────────────
+// Format : timestamp_ms;id;extended;rtr;dlc;data
+// Exemple : 1523;0x1A0;0;0;8;12 3A FF 00 00 00 07 E1
+static void logCanFrame(const twai_message_t &f) {
+  char line[96];
+  size_t n = 0;
+
+  n += snprintf(line + n, sizeof(line) - n, "%lu;0x%lX;%d;%d;%d;",
+                (unsigned long)millis(),
+                (unsigned long)f.identifier,
+                f.extd ? 1 : 0,
+                f.rtr  ? 1 : 0,
+                (int)f.data_length_code);
+
+  // RTR (requête, pas de données) → champ data vide
+  if (!f.rtr) {
+    for (int i = 0; i < f.data_length_code && i < 8 && n < sizeof(line) - 4; i++) {
+      n += snprintf(line + n, sizeof(line) - n, "%02X%s",
+                    f.data[i], (i < f.data_length_code - 1) ? " " : "");
+    }
+  }
+
+  Serial.println(line);
+}
+#endif
+
 static void canTask(void* arg) {
   for (;;) {
     twai_message_t f;
@@ -509,22 +539,25 @@ static void canTask(void* arg) {
     // #2: Changed from reboot to log only every 5 seconds
     if ((millis() - bootTime) > 20000 && canAnyFrames == 0) {
       if (millis() - lastNoCanWarn > 5000) {
-        Serial.println("No CAN frames yet, staying alive.");
+        //Serial.println("No CAN frames yet, staying alive.");
         lastNoCanWarn = millis();
       }
     }
     
     while (twai_receive(&f, pdMS_TO_TICKS(2)) == ESP_OK) {
+#if CAN_SERIAL_LOG
+      logCanFrame(f);   // journalise TOUTES les trames reçues sur le bus
+#endif
       canAnyFrames++;
       canRxBeat++;
       lastCanFrameMs = millis();
 
       unsigned long now = millis();
       if (now - lastCanLogMs >= 10000) {
-        Serial.printf("[CAN] total=%lu last_id=0x%03lX dlc=%u\n",
-                      (unsigned long)canAnyFrames,
-                      (unsigned long)f.identifier,
-                      (unsigned)f.data_length_code);
+        //Serial.printf("[CAN] total=%lu last_id=0x%03lX dlc=%u\n",
+        //              (unsigned long)canAnyFrames,
+        //              (unsigned long)f.identifier,
+        //              (unsigned)f.data_length_code);
         lastCanLogMs = now;
       }
 
@@ -576,14 +609,14 @@ static void canTask(void* arg) {
     if (twai_get_status_info(&st) == ESP_OK) {
       unsigned long nowStatus = millis();
       if (nowStatus - lastStatusLog >= 5000) {
-        Serial.printf("[TWAI] state=%d tx_err=%u rx_err=%u missed=%u txOk=%u\n",
-          st.state, st.tx_error_counter, st.rx_error_counter, 
-          st.rx_missed_count, (unsigned)txOk);
+        //Serial.printf("[TWAI] state=%d tx_err=%u rx_err=%u missed=%u txOk=%u\n",
+        //  st.state, st.tx_error_counter, st.rx_error_counter, 
+        //  st.rx_missed_count, (unsigned)txOk);
         lastStatusLog = nowStatus;
       }
 
       if (st.state == TWAI_STATE_BUS_OFF) {
-        Serial.println("TWAI: Bus off, recovering...");
+        //Serial.println("TWAI: Bus off, recovering...");
         twai_initiate_recovery();
         vTaskDelay(pdMS_TO_TICKS(300));
       }
@@ -776,7 +809,7 @@ static void httpReset() {
 }
 
 static void webTask(void* arg) {
-  Serial.println("WiFi: Starting AP...");
+  //Serial.println("WiFi: Starting AP...");
   
   WiFi.disconnect(true);
   delay(100);
@@ -790,12 +823,12 @@ static void webTask(void* arg) {
   
   // #6: Retry AP startup instead of dying
   while (!WiFi.softAP(ssid, "12345678")) {
-    Serial.println("WiFi: Failed to start AP, retrying...");
+    //Serial.println("WiFi: Failed to start AP, retrying...");
     vTaskDelay(pdMS_TO_TICKS(3000));
   }
   
   IPAddress ip = WiFi.softAPIP();
-  Serial.printf("AP: SSID=%s IP=%s\n", ssid, ip.toString().c_str());
+  //Serial.printf("AP: SSID=%s IP=%s\n", ssid, ip.toString().c_str());
 
   server.on("/",           HTTP_GET,  httpRoot);
   server.on("/api/config", HTTP_GET,  httpConfig);
@@ -821,36 +854,36 @@ void setup() {
   rtcBootCount++;
   
   esp_reset_reason_t reset_reason = esp_reset_reason();
-  Serial.printf("\n=== BOOT START ===\n");
-  Serial.printf("Reset reason: %d (%s)\n", reset_reason, resetReasonName(reset_reason));
-  Serial.printf("RTC boot count: %lu\n", (unsigned long)rtcBootCount);
+  //Serial.printf("\n=== BOOT START ===\n");
+  //Serial.printf("Reset reason: %d (%s)\n", reset_reason, resetReasonName(reset_reason));
+  //Serial.printf("RTC boot count: %lu\n", (unsigned long)rtcBootCount);
   if (reset_reason == ESP_RST_BROWNOUT) {
-    Serial.println("WARNING: Brownout detected!");
+    //Serial.println("WARNING: Brownout detected!");
   }
   
-  Serial.printf("IDF version: %s\n", esp_get_idf_version());
+  //Serial.printf("IDF version: %s\n", esp_get_idf_version());
 
-  Serial.println("Loading config...");
+  //Serial.println("Loading config...");
   cfgLoad();
   cfgClampAll(cfg);
 
-  Serial.printf("mode=%u id=0x%03X torqueCount=%u enabled=%u\n",
-    cfg.mode, cfg.targetId, cfg.torqueCount, cfg.enabled);
+  //Serial.printf("mode=%u id=0x%03X torqueCount=%u enabled=%u\n",
+  //  cfg.mode, cfg.targetId, cfg.torqueCount, cfg.enabled);
 
   // Start dashboard first so the ESP is visible during the driver-wake delay.
-  Serial.println("Creating web task...");
+  //Serial.println("Creating web task...");
   BaseType_t ret2 = xTaskCreatePinnedToCore(webTask, "web", 8192, nullptr, 1, nullptr, 0);
   if (ret2 != pdPASS) {
-    Serial.printf("Web task creation failed: %d\n", ret2);
+    //Serial.printf("Web task creation failed: %d\n", ret2);
     delay(3000);
     ESP.restart();
   }
 
   // #1: Driver-wake delay before touching CAN/TWAI.
-  Serial.println("Driver-wake power detected. Waiting 10 seconds before CAN init...");
+  //Serial.println("Driver-wake power detected. Waiting 10 seconds before CAN init...");
   delay(DRIVER_WAKE_DELAY_MS);
 
-  Serial.println("Initializing TWAI...");
+  //Serial.println("Initializing TWAI...");
   twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
       (gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN, TWAI_MODE_NORMAL);
   g.rx_queue_len = 256;
@@ -860,10 +893,10 @@ void setup() {
 
   esp_err_t err1 = twai_driver_install(&g, &t, &f);
   esp_err_t err2 = twai_start();
-  Serial.printf("TWAI: %s / %s\n", esp_err_to_name(err1), esp_err_to_name(err2));
+  //Serial.printf("TWAI: %s / %s\n", esp_err_to_name(err1), esp_err_to_name(err2));
     
   if (err1 != ESP_OK || err2 != ESP_OK) {
-    Serial.println("TWAI init failed! Rebooting...");
+    //Serial.println("TWAI init failed! Rebooting...");
     delay(3000);
     ESP.restart();
   }
@@ -873,17 +906,20 @@ void setup() {
   twaiReady = true;
   delay(100);
 
-  Serial.println("Creating CAN task...");
+  //Serial.println("Creating CAN task...");
   BaseType_t ret1 = xTaskCreatePinnedToCore(canTask, "can", 8192, nullptr, 5, nullptr, 1);
   
   // #3: Reboot instead of freeze on task creation failure.
   if (ret1 != pdPASS) {
-    Serial.printf("CAN task creation failed: %d\n", ret1);
+    //Serial.printf("CAN task creation failed: %d\n", ret1);
     delay(3000);
     ESP.restart();
   }
   
-  Serial.println("BOOT OK");
+  //Serial.println("BOOT OK");
+#if CAN_SERIAL_LOG
+  Serial.println("timestamp_ms;id;extended;rtr;dlc;data");
+#endif
 }
 
 // #4: Heartbeat logging in loop()
@@ -897,19 +933,19 @@ void loop() {
   if (now - lastBeatLog >= 5000) {
     lastBeatLog = now;
     unsigned long canAgeMs = (lastCanFrameMs == 0) ? 999999 : (now - lastCanFrameMs);
-    Serial.printf(
-      "[BEAT] uptime=%lu loop=%lu canBeat=%lu canRxBeat=%lu webBeat=%lu canFrames=%lu canAgeMs=%lu txOk=%lu txFail=%lu heap=%u\n",
-      now / 1000,
-      (unsigned long)loopBeat,
-      (unsigned long)canBeat,
-      (unsigned long)canRxBeat,
-      (unsigned long)webBeat,
-      (unsigned long)canAnyFrames,
-      canAgeMs,
-      (unsigned long)txOk,
-      (unsigned long)txFail,
-      ESP.getFreeHeap()
-    );
+    //Serial.printf(
+    //  "[BEAT] uptime=%lu loop=%lu canBeat=%lu canRxBeat=%lu webBeat=%lu canFrames=%lu canAgeMs=%lu txOk=%lu txFail=%lu heap=%u\n",
+    //  now / 1000,
+    //  (unsigned long)loopBeat,
+    //  (unsigned long)canBeat,
+    //  (unsigned long)canRxBeat,
+    //  (unsigned long)webBeat,
+    //  (unsigned long)canAnyFrames,
+    //  canAgeMs,
+    //  (unsigned long)txOk,
+    //  (unsigned long)txFail,
+    //  ESP.getFreeHeap()
+    //);
   }
 
   vTaskDelay(pdMS_TO_TICKS(1000));
