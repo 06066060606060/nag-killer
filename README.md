@@ -1,4 +1,4 @@
-# Nag-killer ESP32-S3 WITH SERIAL CAN LOGGING  
+# Nag-killer ESP32-S3 with serial can logging  
 -Added CAN bus serial logging support (csv)  
 -CSV output on the serial port can be interpreted using my [script](https://github.com/06066060606060/ESP32_CAN_BUS_Sniffer) & viewer.
   
