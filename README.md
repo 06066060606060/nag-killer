@@ -1,5 +1,8 @@
-# Nag-killer ESP32-S3 WITH SERIAL CAN LOG
-
+# Nag-killer ESP32-S3 WITH SERIAL CAN LOGGING  
+-Added CAN bus serial logging support (csv)  
+-CSV output on the serial port can be interpreted using my [script](https://github.com/06066060606060/ESP32_CAN_BUS_Sniffer) & viewer.
+  
+---
 > ⚠️ Research / educational firmware only.
 >
 > This project interacts with a vehicle CAN bus. It is intended for controlled bench testing, code review, and research environments only.It sends signals directly to the controller, not a physical command to the steering wheel. Do not use this on public roads or in any situation where unsafe behavior could put people or property at risk. You are responsible for your own testing, wiring, configuration, and local laws.
