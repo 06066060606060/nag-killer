@@ -19,6 +19,7 @@
 #include <esp_system.h>
 #include "driver/twai.h"
 #include "index_html.h"
+#include <freertos/queue.h>
 
 #define CAN_TX_PIN    5
 #define CAN_RX_PIN    6
@@ -503,29 +504,60 @@ static void updateSteering(const twai_message_t& f) {
 }
 
 #if CAN_SERIAL_LOG
-// ── Log CAN → port série ───────────────────────────────────────
+// ── Log CAN → port série (découplé, non bloquant) ──────────────
 // Format : timestamp_ms;id;extended;rtr;dlc;data
 // Exemple : 1523;0x1A0;0;0;8;12 3A FF 00 00 00 07 E1
-static void logCanFrame(const twai_message_t &f) {
-  char line[96];
-  size_t n = 0;
+//
+// IMPORTANT : Serial.println() est bloquant à 115200 bauds. Si on l'appelle
+// directement depuis canTask() sur un bus chargé (centaines de trames/s),
+// canTask ne rend jamais la main -> la tâche IDLE du cœur ne tourne plus ->
+// le Task Watchdog reboote l'ESP32 (typiquement quelques secondes après le
+// réveil du bus CAN). On découple donc : canTask pousse dans une file
+// (non bloquant, on jette la trame si la file est pleine plutôt que
+// d'attendre) et une tâche dédiée à basse priorité vide la file vers Serial.
+typedef struct {
+  unsigned long ts;
+  uint32_t id;
+  uint8_t  extd;
+  uint8_t  rtr;
+  uint8_t  dlc;
+  uint8_t  data[8];
+} CanLogMsg;
 
-  n += snprintf(line + n, sizeof(line) - n, "%lu;0x%lX;%d;%d;%d;",
-                (unsigned long)millis(),
-                (unsigned long)f.identifier,
-                f.extd ? 1 : 0,
-                f.rtr  ? 1 : 0,
-                (int)f.data_length_code);
+static QueueHandle_t canLogQueue = nullptr;
 
-  // RTR (requête, pas de données) → champ data vide
+static inline void logCanFrame(const twai_message_t &f) {
+  if (!canLogQueue) return;
+  CanLogMsg m;
+  m.ts   = millis();
+  m.id   = f.identifier;
+  m.extd = f.extd ? 1 : 0;
+  m.rtr  = f.rtr  ? 1 : 0;
+  m.dlc  = f.data_length_code;
   if (!f.rtr) {
-    for (int i = 0; i < f.data_length_code && i < 8 && n < sizeof(line) - 4; i++) {
-      n += snprintf(line + n, sizeof(line) - n, "%02X%s",
-                    f.data[i], (i < f.data_length_code - 1) ? " " : "");
+    uint8_t n = f.data_length_code < 8 ? f.data_length_code : 8;
+    memcpy(m.data, f.data, n);
+  }
+  xQueueSend(canLogQueue, &m, 0);   // 0 = jamais bloquant ; trame perdue si file pleine
+}
+
+static void canLogTask(void *arg) {
+  CanLogMsg m;
+  char line[96];
+  for (;;) {
+    if (xQueueReceive(canLogQueue, &m, portMAX_DELAY) == pdTRUE) {
+      size_t n = 0;
+      n += snprintf(line + n, sizeof(line) - n, "%lu;0x%lX;%d;%d;%d;",
+                    m.ts, (unsigned long)m.id, m.extd, m.rtr, (int)m.dlc);
+      if (!m.rtr) {
+        for (int i = 0; i < m.dlc && i < 8 && n < sizeof(line) - 4; i++) {
+          n += snprintf(line + n, sizeof(line) - n, "%02X%s",
+                        m.data[i], (i < m.dlc - 1) ? " " : "");
+        }
+      }
+      Serial.println(line);
     }
   }
-
-  Serial.println(line);
 }
 #endif
 
@@ -870,6 +902,13 @@ void setup() {
   //Serial.printf("mode=%u id=0x%03X torqueCount=%u enabled=%u\n",
   //  cfg.mode, cfg.targetId, cfg.torqueCount, cfg.enabled);
 
+#if CAN_SERIAL_LOG
+  // File + tâche de log dédiée (core 0, basse priorité) : ne bloque jamais canTask
+  canLogQueue = xQueueCreate(256, sizeof(CanLogMsg));
+  xTaskCreatePinnedToCore(canLogTask, "canlog", 4096, nullptr, 1, nullptr, 0);
+  Serial.println("timestamp_ms;id;extended;rtr;dlc;data");
+#endif
+
   // Start dashboard first so the ESP is visible during the driver-wake delay.
   //Serial.println("Creating web task...");
   BaseType_t ret2 = xTaskCreatePinnedToCore(webTask, "web", 8192, nullptr, 1, nullptr, 0);
@@ -917,9 +956,6 @@ void setup() {
   }
   
   //Serial.println("BOOT OK");
-#if CAN_SERIAL_LOG
-  Serial.println("timestamp_ms;id;extended;rtr;dlc;data");
-#endif
 }
 
 // #4: Heartbeat logging in loop()
