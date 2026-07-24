@@ -1,4 +1,4 @@
-# Nag-killer ESP32-S3
+# Nag-killer ESP32-S3 WITH SERIAL CAN LOG
 
 > ⚠️ Research / educational firmware only.
 >
