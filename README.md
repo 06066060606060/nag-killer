@@ -20,7 +20,6 @@ This fork was adapted for:
 
 ## Board Setup (Arduino IDE)  
 - Board: LilyGo T-Display S3 
-- Partition: Huge APP (HTML is ~25 kB in PROGMEM)  
 
 ## Libraries needed:  
 - ESP32 BLE Arduino (built-in)  
