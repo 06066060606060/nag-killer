@@ -17,6 +17,25 @@ This fork was adapted for:
 
 
 ---
+
+## Board Setup (Arduino IDE)  
+- Board: LilyGo T-Display S3 
+- Partition: Huge APP (HTML is ~25 kB in PROGMEM)  
+
+## Libraries needed:  
+- ESP32 BLE Arduino (built-in)  
+- mcp2515 by autowp (install via Library Manager)  
+https://github.com/autowp/arduino-mcp2515
+
+## Files in sketch folder:
+- T2CAN_Unified.ino  
+- index_html.h  
+- pin_config.h  
+
+## Wiring
+- CAN A (MCP2515): connect to the bus carrying 0x370 / 0x399 / 0x129  
+- CAN B (TWAI): connect to the bus carrying 280 / 390 / 921 / 1016 / 1021  
+
 ## Dashboard Notes
 
 - The AP name will be something like T2CAN-A1B2 (password: 12345678).  
