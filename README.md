@@ -27,7 +27,7 @@ This fork was adapted for:
 https://github.com/autowp/arduino-mcp2515
 
 ## Files in sketch folder:
-- T2CAN_Unified.ino  
+- nag-killer-t2can-test.ino  
 - index_html.h  
 - pin_config.h  
 
