@@ -176,8 +176,11 @@ Do not use this software unless you understand the risks of automotive CAN bus m
 
 ---
 
-## PlatformIO Project
+## Variant
+- Nag-killer with serial can logging
+https://github.com/06066060606060/nag-killer/tree/can-log-serial
 
+- PlatformIO Project
 https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review
 
 ## Credits
