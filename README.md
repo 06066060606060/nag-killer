@@ -161,6 +161,9 @@ Do not use this software unless you understand the risks of automotive CAN bus m
 - Nag-killer with serial can logging
 https://github.com/06066060606060/nag-killer/tree/can-log-serial
 
+- Nag-killer & EU-Summon-Unlock for LilyGO/T-2Can
+https://github.com/06066060606060/nag-killer/tree/t2can-test
+
 - PlatformIO Project
 https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review
 
