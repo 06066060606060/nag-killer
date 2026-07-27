@@ -58,13 +58,12 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     <div class="modes">
       <button id="modeA" class="primary">A &mdash; Simple</button>
       <button id="modeB">B &mdash; TSL6P (burst/pause)</button>
-      <button id="modeC">C &mdash; State machine</button>
       <button id="modeR" class="danger" style="margin-left:auto">Reset</button>
     </div>
     <div style="font-size:11px;color:var(--muted);line-height:1.55">
       <b>A</b>: CAN 0x370, fixed +1.80&nbsp;Nm, handsOn=1 always. Proven on MY 2022 HW3 pre-Juniper.<br>
       <b>B</b>: Configurable target CAN ID, default 0x370, 4-value torque cycle, time-bursty (<span id="lbl_burst">1000</span> ms inject / <span id="lbl_pause">1500</span> ms rest). Closer to the actual TSL6P-style burst/pause behavior from sniff logs.<br>
-      <b>C</b>: <a href="#" style="color:var(--muted)">@Linu</a>'s state machine on DAS_autopilotHandsOnState. Refuses to inject if context CAN frames are stale &gt;1&nbsp;s.
+      
     </div>
   </section>
 
@@ -84,32 +83,6 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     </div>
     <div class="tbar">
       <button id="toggle" disabled>Disable</button>
-    </div>
-  </section>
-
-  <section class="panel" id="modeC_panel">
-    <h2>mode C context (DAS state)</h2>
-    <div class="row">
-      <div class="stat"><div class="k">apState</div><div class="v" id="c_ap">&mdash;</div></div>
-      <div class="stat"><div class="k">handsOnState</div><div class="v" id="c_ho">&mdash;</div></div>
-      <div class="stat"><div class="k">steering deg</div><div class="v" id="c_st">&mdash;</div></div>
-      <div class="stat"><div class="k">apState fresh</div><div class="v" id="c_apf">&mdash;</div></div>
-      <div class="stat"><div class="k">steering fresh</div><div class="v" id="c_stf">&mdash;</div></div>
-    </div>
-    <div style="font-size:11px;color:var(--muted);margin-top:8px">
-      Mode C will only inject when both freshness indicators are green
-      (last frame received within 1&nbsp;s). If your car uses CAN IDs
-      different from the defaults below, edit them here. The Mode C
-      gating logic refuses to inject under unknown context — safer than
-      guessing.
-    </div>
-    <div class="grid2" style="margin-top:10px">
-      <label>autopilotState CAN ID
-        <input type="text" id="f_apId" placeholder="0x399">
-      </label>
-      <label>steeringAngle CAN ID
-        <input type="text" id="f_stId" placeholder="0x129">
-      </label>
     </div>
   </section>
 
