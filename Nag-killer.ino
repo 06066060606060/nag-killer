@@ -35,7 +35,7 @@ static const unsigned long DRIVER_WAKE_DELAY_MS = 10000;  // #1: Before CAN init
 static const unsigned long INJECTION_DELAY_MS = 15000;    // After CAN init
 
 // ── Modes ───────────────────────────────────────────────────────
-enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_C = 2, MODE_CUSTOM = 3 };
+enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_CUSTOM = 2 };
 
 // ── Runtime config (persisted to NVS) ───────────────────────────
 struct Config {
@@ -65,7 +65,7 @@ struct Config {
 static Config cfg;
 static portMUX_TYPE cfgMux = portMUX_INITIALIZER_UNLOCKED;
 
-// ── Live context (Mode C) ───────────────────────────────────────
+// ── Live context ───────────────────────────────────────────────
 struct Context {
   uint8_t  apState;
   uint8_t  handsOnState;
@@ -73,10 +73,6 @@ struct Context {
   float    steeringAngleDeg;
   unsigned long lastApStateMs;
   unsigned long lastSteeringMs;
-  unsigned long state2EnterMs;
-  unsigned long state3EnterMs;
-  uint16_t walkSeed;
-  float    lastModeCTorqueNm;
 };
 static Context ctx;
 static portMUX_TYPE ctxMux = portMUX_INITIALIZER_UNLOCKED;
@@ -165,15 +161,6 @@ static void cfgDefaultsModeB(Config& c) {
   c.torqueB2[1] = 0x08; c.torqueB3[1] = 0x98;
   c.torqueB2[2] = 0x07; c.torqueB3[2] = 0x6C;
   c.torqueB2[3] = 0x07; c.torqueB3[3] = 0x4E;
-  c.hoRatePct   = 100;
-}
-static void cfgDefaultsModeC(Config& c) {
-  cfgSetCommonDefaults(c);
-  c.mode        = MODE_C;
-  c.targetId    = 0x370;
-  c.torqueCount = 1;
-  c.torqueB2[0] = 0x08;
-  c.torqueB3[0] = 0xB6;
   c.hoRatePct   = 100;
 }
 
@@ -342,57 +329,6 @@ static bool decideInjection(const twai_message_t& src,
     return true;
   }
 
-  if (mode == MODE_C) {
-    Context c;
-    portENTER_CRITICAL(&ctxMux); 
-    c = ctx; 
-    portEXIT_CRITICAL(&ctxMux);
-
-    const unsigned long FRESH_MS = 1000;
-    if (now - c.lastApStateMs  > FRESH_MS) return false;
-    if (now - c.lastSteeringMs > FRESH_MS) return false;
-
-    if (c.apState < 3 || c.apState > 6)   return false;
-    if (fabsf(c.steeringAngleDeg) > 5.0f) return false;
-
-    float torqueNm;
-    bool  setHo;
-    if (c.handsOnState == 1) return false;
-    else if (c.handsOnState == 2) {
-      if (c.state2EnterMs == 0) return false;
-      if (now - c.state2EnterMs < 2000) return false;
-      uint16_t s = c.walkSeed;
-      s = (uint16_t)(s * 1103u + 12345u);
-      float delta = ((int)(s & 0x1F) - 16) * 0.05f;
-      float prev = c.lastModeCTorqueNm;
-      float mag = fabsf(prev) + delta;
-      if (mag < 0.5f) mag = 0.5f;
-      if (mag > 1.8f) mag = 1.8f;
-      torqueNm = (c.steeringAngleDeg > 0.0f) ? -mag : +mag;
-      setHo = (fabsf(torqueNm) >= 1.0f);
-      portENTER_CRITICAL(&ctxMux);
-      ctx.walkSeed = s;
-      ctx.lastModeCTorqueNm = torqueNm;
-      portEXIT_CRITICAL(&ctxMux);
-    }
-    else if (c.handsOnState == 3) {
-      if (c.state3EnterMs == 0) return false;
-      if (now - c.state3EnterMs < 1000) return false;
-      uint32_t activeMs = (uint32_t)(now - c.state3EnterMs - 1000);
-      uint32_t phase = activeMs % 1000;
-      if (phase < 500) torqueNm = -1.8f + (phase / 500.0f) * 3.6f;
-      else             torqueNm = +1.8f - ((phase - 500) / 500.0f) * 3.6f;
-      setHo = (fabsf(torqueNm) >= 1.0f);
-    }
-    else {
-      return false;
-    }
-
-    nmToBytes(torqueNm, out_b2, out_b3);
-    out_setHo = setHo;
-    return true;
-  }
-
   return false;
 }
 
@@ -467,10 +403,6 @@ static void updateApState(const twai_message_t& f) {
   if (ho != ctx.handsOnState) {
     ctx.prevHandsOnState = ctx.handsOnState;
     ctx.handsOnState = ho;
-    if (ho == 2 && ctx.state2EnterMs == 0) ctx.state2EnterMs = now;
-    if (ho != 2) ctx.state2EnterMs = 0;
-    if (ho == 3 && ctx.state3EnterMs == 0) ctx.state3EnterMs = now;
-    if (ho != 3) ctx.state3EnterMs = 0;
   }
   portEXIT_CRITICAL(&ctxMux);
 }
@@ -676,9 +608,8 @@ static void httpStats()  { server.send(200, "application/json", statsToJson()); 
 static void httpSetMode() {
   int m = server.arg("m").toInt();
   Config nc;
-  if      (m == 1) cfgDefaultsModeB(nc);
-  else if (m == 2) cfgDefaultsModeC(nc);
-  else             cfgDefaultsModeA(nc);
+  if (m == 1) cfgDefaultsModeB(nc);
+  else        cfgDefaultsModeA(nc);
   
   portENTER_CRITICAL(&cfgMux); 
   cfg = nc; 
