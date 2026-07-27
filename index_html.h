@@ -189,8 +189,7 @@ function renderConfig() {
   $('lbl_pause').textContent = cfg.pauseMs;
   $('toggle').textContent = cfg.enabled ? 'Disable' : 'Enable';
   
-  ['modeA','modeB','modeC'].forEach((id,m) => $(id).classList.toggle('primary', cfg.mode === m));
-  $('modeC_panel').style.opacity = (cfg.mode === 2) ? '1' : '0.55';
+  ['modeA','modeB'].forEach((id,m) => $(id).classList.toggle('primary', cfg.mode === m));
   
   renderTorque();
 }
@@ -206,7 +205,6 @@ async function loadConfig() {
     $('apply').disabled = false;
     $('modeA').disabled = false;
     $('modeB').disabled = false;
-    $('modeC').disabled = false;
     $('modeR').disabled = false;
     $('tq_add').disabled = false;
     $('tq_del').disabled = false;
@@ -325,14 +323,12 @@ async function applyOverrides() {
 // Initialize button states (disabled until config loads)
 $('modeA').disabled = true;
 $('modeB').disabled = true;
-$('modeC').disabled = true;
 $('modeR').disabled = true;
 $('tq_add').disabled = true;
 $('tq_del').disabled = true;
 
 $('modeA').onclick  = () => setMode(0);
 $('modeB').onclick  = () => setMode(1);
-$('modeC').onclick  = () => setMode(2);
 $('modeR').onclick  = async () => {
   if (!cfg) { showToast('not ready'); return; }
   if (!confirm('Reset all settings to Mode A defaults?')) return;
