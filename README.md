@@ -79,25 +79,6 @@ re-analysis of the log).
 > the TSL6P log shows it's actually `~1 s on, ~1.4–2.0 s off` — the
 > DAS-side detector is satisfied by the *rest period*, not by the
 > per-frame probability. v2 now reproduces the time pattern.
-
-### C — State machine (community algorithm by @Linu)
-
-Implements the gated state machine watches
-`DAS_autopilotHandsOnState` and only injects under tight conditions:
-
-- `DAS_autopilotState ∈ {3,4,5,6}` (AP active range)
-- `|SCCM_steeringAngle| ≤ 5°`
-- `handsOnState == 1` → never inject (mandatory rest)
-- `handsOnState == 2` → wait 2 s, then mild random-walk torque in the
-  range `±0.5 … ±1.8 Nm`, **opposite** the current steering angle
-- `handsOnState == 3` → wait 1 s, then sweep `−1.8 ↔ +1.8 Nm` in 1-s
-  cycles (Linu's original spec is `±2.0`; we cap at `±1.80` per the
-  pinned safety warning)
-
-**Safety net:** if no fresh frames are seen on the configured
-`apStateId` and `steeringId` within the last second, Mode C refuses
-to inject. So if the default CAN IDs (`0x399`, `0x129`) don't match
-your car's bus, the firmware safely no-ops instead of guessing.
  
 ## Common endpoints
 
