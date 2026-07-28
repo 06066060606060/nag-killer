@@ -32,8 +32,8 @@ https://github.com/autowp/arduino-mcp2515
 - pin_config.h  
 
 ## Wiring
-- CAN A (MCP2515): connect to the bus carrying 0x370 / 0x399 / 0x129  Nag Killer 
-- CAN B (TWAI): connect to the bus carrying 280 / 390 / 921 / 1016 / 1021  Summon Unlock  
+- CAN A (MCP2515): connect to the bus carrying 0x370 / 0x399 / 0x129 Party CAN - Nag Killer (2-3)
+- CAN B (TWAI): connect to the bus carrying 280 / 390 / 921 / 1016 / 1021 Chassis CAN - Summon Unlock (13-14)
 
 ## Dashboard Notes
 
