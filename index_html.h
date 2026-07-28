@@ -87,13 +87,11 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     <div class="modes">
       <button id="modeA" class="primary">A &mdash; Simple</button>
       <button id="modeB">B &mdash; TSL6P (burst/pause)</button>
-      <button id="modeC">C &mdash; State machine</button>
       <button id="modeR" class="danger" style="margin-left:auto">Reset</button>
     </div>
     <div style="font-size:11px;color:var(--muted);line-height:1.55">
       <b>A</b>: CAN 0x370, fixed +1.80&nbsp;Nm, handsOn=1 always. Proven on MY 2022 HW3 pre-Juniper.<br>
       <b>B</b>: Configurable target CAN ID, default 0x370, 4-value torque cycle, time-bursty (<span id="lbl_burst">1000</span> ms inject / <span id="lbl_pause">1500</span> ms rest).<br>
-      <b>C</b>: State machine on DAS_autopilotHandsOnState. Refuses to inject if context CAN frames are stale &gt;1&nbsp;s.
     </div>
   </section>
 
@@ -116,27 +114,6 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     </div>
   </section>
 
-  <section class="panel" id="modeC_panel">
-    <h2>mode C context (DAS state)</h2>
-    <div class="row">
-      <div class="stat"><div class="k">apState</div><div class="v" id="c_ap">&mdash;</div></div>
-      <div class="stat"><div class="k">handsOnState</div><div class="v" id="c_ho">&mdash;</div></div>
-      <div class="stat"><div class="k">steering deg</div><div class="v" id="c_st">&mdash;</div></div>
-      <div class="stat"><div class="k">apState fresh</div><div class="v" id="c_apf">&mdash;</div></div>
-      <div class="stat"><div class="k">steering fresh</div><div class="v" id="c_stf">&mdash;</div></div>
-    </div>
-    <div style="font-size:11px;color:var(--muted);margin-top:8px">
-      Mode C will only inject when both freshness indicators are green (last frame received within 1&nbsp;s).
-    </div>
-    <div class="grid2" style="margin-top:10px">
-      <label>autopilotState CAN ID
-        <input type="text" id="f_apId" placeholder="0x399">
-      </label>
-      <label>steeringAngle CAN ID
-        <input type="text" id="f_stId" placeholder="0x129">
-      </label>
-    </div>
-  </section>
 
   <section class="panel">
     <h2>advanced &mdash; runtime overrides</h2>
@@ -152,7 +129,7 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       </label>
     </div>
     <details>
-      <summary>torque table (used by modes A/B/Custom &mdash; ignored by mode C)</summary>
+      <summary>torque table (used by modes A/B)</summary>
       <table>
         <thead><tr><th>#</th><th>byte2 (hex)</th><th>byte3 (hex)</th><th>Nm</th></tr></thead>
         <tbody id="tq_tbody"></tbody>
@@ -328,8 +305,7 @@ function renderNagConfig() {
   $('lbl_burst').textContent = nagCfg.burstMs;
   $('lbl_pause').textContent = nagCfg.pauseMs;
   $('toggle').textContent = nagCfg.enabled ? 'Disable' : 'Enable';
-  ['modeA','modeB','modeC'].forEach((id,m) => $(id).classList.toggle('primary', nagCfg.mode === m));
-  $('modeC_panel').style.opacity = (nagCfg.mode === 2) ? '1' : '0.55';
+  [['modeA',0],['modeB',1]].forEach(([id,m]) => { const el = $(id); if (el) el.classList.toggle('primary', nagCfg.mode === m); });
   renderNagTorque();
 }
 
@@ -343,7 +319,6 @@ async function loadNagConfig() {
     $('apply').disabled = false;
     $('modeA').disabled = false;
     $('modeB').disabled = false;
-    $('modeC').disabled = false;
     $('modeR').disabled = false;
     $('tq_add').disabled = false;
     $('tq_del').disabled = false;
@@ -362,11 +337,15 @@ function freshTag(ms) {
   return [ms+' ms ago', 'ok'];
 }
 
+let nagLastOkMs = 0;
 async function tickNagStats() {
   if (nagIsLoading) return;
   try {
     nagIsLoading = true;
-    const r = await fetch('/api/nag/stats');
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 1200);
+    const r = await fetch('/api/nag/stats', { cache:'no-store', signal: ctrl.signal });
+    clearTimeout(to);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const s = await r.json();
     $('s_rx').textContent   = s.rx;
@@ -384,16 +363,12 @@ async function tickNagStats() {
     $('conn').className    = 'pill ok';
     $('s_en').textContent   = nagCfg && nagCfg.enabled ? 'YES' : 'NO';
     $('s_en').className     = 'v ' + (nagCfg && nagCfg.enabled ? 'ok' : 'warn');
-    $('c_ap').textContent  = s.apState;
-    $('c_ho').textContent  = s.handsOnState;
-    $('c_st').textContent  = s.steeringDeg + ' °';
-    let [t1,c1] = freshTag(s.apStaleMs);
-    let [t2,c2] = freshTag(s.stStaleMs);
-    $('c_apf').textContent = t1; $('c_apf').className = 'v ' + c1;
-    $('c_stf').textContent = t2; $('c_stf').className = 'v ' + c2;
+    nagLastOkMs = Date.now();
   } catch(e) {
-    $('conn').textContent = 'lost';
-    $('conn').className   = 'pill bad';
+    if (Date.now() - nagLastOkMs > 3000) {
+      $('conn').textContent = 'lost';
+      $('conn').className   = 'pill bad';
+    }
   } finally {
     nagIsLoading = false;
   }
@@ -448,7 +423,6 @@ async function applyNagOverrides() {
 
 $('modeA').onclick  = () => setNagMode(0);
 $('modeB').onclick  = () => setNagMode(1);
-$('modeC').onclick  = () => setNagMode(2);
 $('modeR').onclick  = async () => {
   if (!nagCfg) { showToast('not ready'); return; }
   if (!confirm('Reset all settings to Mode A defaults?')) return;
