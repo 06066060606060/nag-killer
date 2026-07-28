@@ -11,8 +11,8 @@ This fork was adapted for:
 
 | Device                       | Can Transceiver                 | CAN RX / CAN TX   | Can Bus      | Power                     |
 | ---------------------------- | ------------------------------- | ----------------- | ------------ | ------------------------- |
-| LilyGO/T-2Can                |CAN A (MCP2515) → Nag Killer     |                   |              |                           |
-|                              |CAN B (TWAI) → Summon Unlock     |                   | 500 kbps CAN | USB-C or stable 12V supply|
+| LilyGO/T-2Can                |CAN A Party CAN → Nag Killer     |                   |              |                           |
+|                              |CAN B Chassis CAN → Summon Unlock|                   | 500 kbps CAN | USB-C or stable 12V supply|
 
 
 
