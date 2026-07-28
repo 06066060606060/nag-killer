@@ -84,7 +84,7 @@ static const uint8_t  NAG_MAX_TORQUE_ENTRIES = 8;
 static const unsigned long NAG_DRIVER_WAKE_DELAY_MS = 10000;
 static const unsigned long NAG_INJECTION_DELAY_MS = 15000;
 
-enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_C = 2, MODE_CUSTOM = 3 };
+enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_CUSTOM = 2};
 
 struct NagConfig {
   bool     enabled;
@@ -198,15 +198,7 @@ static void nagCfgDefaultsModeB(NagConfig& c) {
   c.torqueB2[3] = 0x07; c.torqueB3[3] = 0x4E;
   c.hoRatePct   = 100;
 }
-static void nagCfgDefaultsModeC(NagConfig& c) {
-  nagCfgSetCommonDefaults(c);
-  c.mode        = MODE_C;
-  c.targetId    = 0x370;
-  c.torqueCount = 1;
-  c.torqueB2[0] = 0x08;
-  c.torqueB3[0] = 0xB6;
-  c.hoRatePct   = 100;
-}
+
 
 static void nagCfgClampAll(NagConfig& c) {
   if (c.torqueCount < 1) c.torqueCount = 1;
@@ -324,50 +316,6 @@ static bool nagDecideInjection(uint8_t dlc,
     return true;
   }
 
-  if (mode == MODE_C) {
-    NagContext c;
-    portENTER_CRITICAL(&nagCtxMux); c = nagCtx; portEXIT_CRITICAL(&nagCtxMux);
-
-    const unsigned long FRESH_MS = 1000;
-    if (now - c.lastApStateMs  > FRESH_MS) return false;
-    if (now - c.lastSteeringMs > FRESH_MS) return false;
-    if (c.apState < 3 || c.apState > 6)   return false;
-    if (fabsf(c.steeringAngleDeg) > 5.0f) return false;
-
-    float torqueNm; bool setHo;
-    if (c.handsOnState == 1) return false;
-    else if (c.handsOnState == 2) {
-      if (c.state2EnterMs == 0) return false;
-      if (now - c.state2EnterMs < 2000) return false;
-      uint16_t s = c.walkSeed;
-      s = (uint16_t)(s * 1103u + 12345u);
-      float delta = ((int)(s & 0x1F) - 16) * 0.05f;
-      float prev = c.lastModeCTorqueNm;
-      float mag = fabsf(prev) + delta;
-      if (mag < 0.5f) mag = 0.5f;
-      if (mag > 1.8f) mag = 1.8f;
-      torqueNm = (c.steeringAngleDeg > 0.0f) ? -mag : +mag;
-      setHo = (fabsf(torqueNm) >= 1.0f);
-      portENTER_CRITICAL(&nagCtxMux);
-      nagCtx.walkSeed = s;
-      nagCtx.lastModeCTorqueNm = torqueNm;
-      portEXIT_CRITICAL(&nagCtxMux);
-    }
-    else if (c.handsOnState == 3) {
-      if (c.state3EnterMs == 0) return false;
-      if (now - c.state3EnterMs < 1000) return false;
-      uint32_t activeMs = (uint32_t)(now - c.state3EnterMs - 1000);
-      uint32_t phase = activeMs % 1000;
-      if (phase < 500) torqueNm = -1.8f + (phase / 500.0f) * 3.6f;
-      else             torqueNm = +1.8f - ((phase - 500) / 500.0f) * 3.6f;
-      setHo = (fabsf(torqueNm) >= 1.0f);
-    }
-    else return false;
-
-    nagNmToBytes(torqueNm, out_b2, out_b3);
-    out_setHo = setHo;
-    return true;
-  }
   return false;
 }
 
@@ -742,18 +690,21 @@ static String nagCfgToJson() {
   s += ",\"pauseMs\":";   s += String(c.pauseMs);
   s += ",\"apStateId\":"; s += String(c.apStateId);
   s += ",\"steeringId\":";s += String(c.steeringId);
-  s += ",\"torque\":[";
-  for (uint8_t i = 0; i < c.torqueCount; i++) {
-    if (i) s += ",";
-    s += "{\"b2\":"; s += String(c.torqueB2[i]);
-    s += ",\"b3\":"; s += String(c.torqueB3[i]);
-    uint16_t raw = ((c.torqueB2[i] & 0x0F) << 8) | c.torqueB3[i];
-    float nm = raw * 0.01f - 20.5f;
-    s += ",\"nm\":"; s += String(nm, 2);
-    s += "}";
-  }
-  s += "]}";
-  return s;
+s += ",\"torque\":[";
+for (uint8_t i = 0; i < c.torqueCount; i++) {
+  if (i) s += ",";
+  s += "{\"b2\":";
+  s += String(c.torqueB2[i]);
+  s += ",\"b3\":";
+  s += String(c.torqueB3[i]);
+  uint16_t raw = ((c.torqueB2[i] & 0x0F) << 8) | c.torqueB3[i];
+  float nm = raw * 0.01f - 20.5f;
+  s += ",\"nm\":";
+  s += String(nm, 2);
+  s += "}";
+}
+s += "]}";
+return s;
 }
 
 static String nagStatsToJson() {
@@ -832,7 +783,6 @@ static void httpNagSetMode() {
   int m = server.arg("m").toInt();
   NagConfig nc;
   if      (m == 1) nagCfgDefaultsModeB(nc);
-  else if (m == 2) nagCfgDefaultsModeC(nc);
   else             nagCfgDefaultsModeA(nc);
   portENTER_CRITICAL(&nagCfgMux); nagCfg = nc; portEXIT_CRITICAL(&nagCfgMux);
   nagCfgSave();
