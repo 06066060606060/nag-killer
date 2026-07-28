@@ -173,6 +173,7 @@ https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review
 - Updated by X₿mod & Hboop.
 - ESP32 TWAI driver by Espressif Systems
 - Automotive CAN research community
+<img width="511" height="967" alt="nag" src="https://github.com/user-attachments/assets/ab560f2c-bc99-4926-81b8-7742308852c7" />
 
 ## Discord server: 
 https://discord.gg/9t5pMuts3
