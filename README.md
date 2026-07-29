@@ -8,7 +8,7 @@
 ## What This Update Changes
 
 - New dashboard design
-- Mode C removed
+- Removed Mode C
 
 ---
 
@@ -135,7 +135,8 @@ https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review
 - ESP32 TWAI driver by Espressif Systems
 - Automotive CAN research community
   
-<img width="511" height="967" alt="nag" src="https://github.com/user-attachments/assets/ab560f2c-bc99-4926-81b8-7742308852c7" />
+<img width="270" height="720" alt="nag" src="https://github.com/user-attachments/assets/1bf8f227-1540-4e55-8539-b36169f78e44" />
+
 
 ## Discord server: 
 https://discord.gg/9t5pMuts3
