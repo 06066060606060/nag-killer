@@ -7,16 +7,8 @@
 
 ## What This Update Changes
 
-This update includes fixes and improvements around:
-
-- CAN message length validation
-- TWAI startup and failure handling
-- Dashboard/API error handling
-- Mode-change state reset logic
-- No-CAN watchdog behavior
-- ESP32-S3 + external CAN transceiver support
-- Serial logging for TX success/failure
-- Safer startup behavior before any injection logic is allowed to run
+- New dashboard design
+- Mode C removed
 
 ---
 
@@ -37,22 +29,6 @@ This fork was adapted for:
 #define CAN_RX_PIN 4
 #define CAN_TX_PIN 5
 ```
-
-### Basic Wiring for SN65HVD230
-
-```text
-ESP32-S3 GPIO 5  ->  SN65HVD230 TXD
-ESP32-S3 GPIO 4  ->  SN65HVD230 RXD
-ESP32-S3 3.3V    ->  SN65HVD230 VCC
-ESP32-S3 GND     ->  SN65HVD230 GND
-
-SN65HVD230 CANH  ->  Vehicle PARTY CANH
-SN65HVD230 CANL  ->  Vehicle PARTY CANL
-```
-
-Note: Some vehicle CAN networks already include termination. Do not add termination blindly without understanding the bus you are connecting to.
-
----
 
 ## Dashboard Notes
 
@@ -142,22 +118,6 @@ Before any live vehicle testing, validate behavior in the safest possible way:
 Do not assume a successful compile means the system is safe.
 
 
-## Disclaimer
-
-This software is provided as-is for educational and research purposes.
-
-It interacts with vehicle CAN systems and may cause unexpected behavior if used incorrectly.
-
-The author of this fork assumes no responsibility for damage, injury, legal issues, warranty issues, or misuse.
-
-Do not use this software on public roads.
-
-Do not use this software in a moving vehicle.
-
-Do not use this software unless you understand the risks of automotive CAN bus modification.
-
----
-
 ## Variant
 - Nag-killer with serial can logging
 https://github.com/06066060606060/nag-killer/tree/can-log-serial
@@ -174,6 +134,7 @@ https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review
 - Updated by X₿mod & Hboop.
 - ESP32 TWAI driver by Espressif Systems
 - Automotive CAN research community
+  
 <img width="511" height="967" alt="nag" src="https://github.com/user-attachments/assets/ab560f2c-bc99-4926-81b8-7742308852c7" />
 
 ## Discord server: 
