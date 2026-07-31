@@ -131,6 +131,7 @@ https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review
 ## Credits
 
 - Original project: `@nicolozak` https://gitlab.com/nicolozak/nag-killer
+- `Ev Open Can Mod` https://github.com/ev-open-can-tools/ev-open-can-tools
 - Updated by X₿mod & Hboop.
 - ESP32 TWAI driver by Espressif Systems
 - Automotive CAN research community
