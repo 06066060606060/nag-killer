@@ -140,4 +140,4 @@ https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review
 
 
 ## Discord server: 
-https://discord.gg/9t5pMuts3
+https://discord.gg/euPbYG8Npc
