@@ -8,15 +8,14 @@
 
 ## What V2.1 Update Changes
 
-Added OTA Update
-Fix dashboard error
-Removed BLE Dashboard
-bypass R79 EU restriction in Autopilot.
-expanded lateral acceleration limits
-lane changes near forks isn't disabled (EAP)
-instantaneous lane change on blinker (EAP)
-no lane change timeout once initiated (EAP)
-takes forks and exits automatically (EAP)
+-Added OTA Update  
+-Removed BLE Dashboard  
+-bypass R79 EU restriction in Autopilot.  
+-expanded lateral acceleration limits  
+-lane changes near forks isn't disabled (EAP)  
+-instantaneous lane change on blinker (EAP)  
+-no lane change timeout once initiated (EAP)  
+-takes forks and exits automatically (EAP)  
 
 ## Hardware Target
 
