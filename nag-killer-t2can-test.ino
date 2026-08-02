@@ -8,12 +8,11 @@
 #include <Preferences.h>
 #include <nvs_flash.h>
 #include <esp_system.h>
+#include <Update.h>
 #include "driver/twai.h"
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
 #include "index_html.h"
+
+#define FW_VERSION "T2CAN-V2.1"
 
 // T-2CAN board specific
 #include "pin_config.h"
@@ -470,10 +469,8 @@ static inline int gearState(uint8_t gear) {
 static inline uint8_t readDASStatus(const uint8_t *data) {
     return data[0] & 0x07;
 }
-static inline bool isDASActive(uint8_t status) {
-    return status == 2 || status == 3 || status == 4;
-}
 
+static volatile bool forceMode = false;
 static portMUX_TYPE stateMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool summonEnabled = true;
 static volatile bool gateAPActive  = false;
@@ -492,6 +489,42 @@ static volatile uint32_t sumRx390    = 0;
 static volatile uint32_t sumRx921    = 0;
 static volatile uint32_t sumRx1016   = 0;
 static char gateBlockReason[48] = "boot";
+
+static inline bool isDASActive(uint8_t status) {
+  bool fm = forceMode;
+
+  switch (status) {
+    // ON : 3,4,5,6
+    case 3:
+    case 4:
+    case 5:
+    case 6:
+      fm = true;
+      break;
+
+    // OFF : 0,1,8,9,14
+    case 0:
+    case 1:
+    case 8:
+    case 9:
+    case 14:
+      fm = false;
+      break;
+
+    default:
+      fm = false;
+      break;
+  }
+
+
+  portENTER_CRITICAL(&stateMux);
+  forceMode = fm;
+  portEXIT_CRITICAL(&stateMux);
+
+
+  return status == 3 || status == 4 || status == 5 || status == 6;
+}
+
 
 static inline bool injectionGateOpen() {
     return gateParked || gateSummoning;
@@ -562,16 +595,18 @@ static void handle1016(const uint8_t *data, uint8_t dlc) {
 }
 
 static void injectSummon(const twai_message_t &src) {
-    bool en, gate;
+     bool en, gate, fmode;
     portENTER_CRITICAL(&stateMux);
     en   = summonEnabled;
     gate = injectionGateOpen();
-    if (!gate) {
+    fmode = forceMode;
+     if (!gate && !fmode) {
         if (!gateAPActive  && !gateParked && !gateSummoning)
             strncpy(gateBlockReason, "AP-,Park-,Summon-", sizeof(gateBlockReason));
     }
     portEXIT_CRITICAL(&stateMux);
-    if (!en || !gate) return;
+     if ((!en || !gate) && !fmode)
+        return;
 
     twai_message_t out;
     out.identifier       = src.identifier;
@@ -599,73 +634,15 @@ static void summonCfgSave() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// BLE GATT (Summon control)
+// OTA UPDATE
 // ═══════════════════════════════════════════════════════════════
 
-#define BLE_SERVICE_UUID   "12345678-1234-1234-1234-123456789abc"
-#define BLE_CHAR_CTRL_UUID "12345678-1234-1234-1234-123456789001"
-#define BLE_CHAR_STAT_UUID "12345678-1234-1234-1234-123456789002"
-
-static BLECharacteristic *bleStatChar = nullptr;
-static volatile bool      bleConnected = false;
-
-class BleServerCb : public BLEServerCallbacks {
-    void onConnect(BLEServer *)    override {
-        bleConnected = true;
-        Serial.println("[BLE] Client connected");
-    }
-    void onDisconnect(BLEServer *s) override {
-        bleConnected = false;
-        Serial.println("[BLE] Client disconnected - re-advertising");
-        s->startAdvertising();
-    }
-};
-
-class BleCtrlCb : public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *c) override {
-        String val = c->getValue().c_str();
-        bool next = (val == "1" || val == "true" || val == "on");
-        portENTER_CRITICAL(&stateMux);
-        summonEnabled = next;
-        portEXIT_CRITICAL(&stateMux);
-        summonCfgSave();
-        Serial.printf("[BLE] summonEnabled -> %s\n", next ? "true" : "false");
-    }
-};
-
-static void bleSetup() {
-    BLEDevice::init("SummonUnlock");
-    BLEServer *srv = BLEDevice::createServer();
-    srv->setCallbacks(new BleServerCb());
-    BLEService *svc = srv->createService(BLE_SERVICE_UUID);
-    BLECharacteristic *ctrlChar = svc->createCharacteristic(
-        BLE_CHAR_CTRL_UUID, BLECharacteristic::PROPERTY_WRITE);
-    ctrlChar->setCallbacks(new BleCtrlCb());
-    bleStatChar = svc->createCharacteristic(
-        BLE_CHAR_STAT_UUID,
-        BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
-    bleStatChar->addDescriptor(new BLE2902());
-    svc->start();
-    BLEAdvertising *adv = BLEDevice::getAdvertising();
-    adv->addServiceUUID(BLE_SERVICE_UUID);
-    adv->setScanResponse(true);
-    adv->setMinPreferred(0x06);
-    BLEDevice::startAdvertising();
-    Serial.println("[BLE] Advertising - SummonUnlock");
-}
-
-static String summonStatsToJson();
-
-static void bleTask(void *arg) {
-    for (;;) {
-        if (bleConnected && bleStatChar) {
-            String j = summonStatsToJson();
-            bleStatChar->setValue(j.c_str());
-            bleStatChar->notify();
-        }
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-}
+static volatile bool     otaInProgress = false;
+static volatile bool     otaSuccess    = false;
+static volatile bool     otaError      = false;
+static volatile uint32_t otaBytes      = 0;
+static volatile uint32_t otaTotal      = 0;
+static char              otaErrMsg[64] = "";
 
 // ═══════════════════════════════════════════════════════════════
 // WEB SERVER
@@ -735,7 +712,7 @@ static String nagStatsToJson() {
 }
 
 static String summonStatsToJson() {
-    bool en, ap, parked, summon, aca, spr;
+    bool en, ap, parked, summon, aca, spr, fmode;
     uint32_t rmx, tok, tfail, r280, r390, r921, r1016;
     portENTER_CRITICAL(&stateMux);
     en     = summonEnabled;
@@ -744,6 +721,7 @@ static String summonStatsToJson() {
     summon = gateSummoning;
     aca    = lastAca;
     spr    = sprSeen;
+    fmode  = forceMode;
     rmx    = sumRxMux1;
     tok    = sumTxOk;
     tfail  = sumTxFail;
@@ -762,6 +740,7 @@ static String summonStatsToJson() {
     s += ",\"summon\":"  + String(summon ? "true" : "false");
     s += ",\"aca\":"     + String(aca    ? "true" : "false");
     s += ",\"spr\":"     + String(spr    ? "true" : "false");
+    s += ",\"forceMode\":"+ String(fmode ? "true" : "false");
     s += ",\"rxMux1\":"  + String(rmx);
     s += ",\"txOk\":"    + String(tok);
     s += ",\"txFail\":"  + String(tfail);
@@ -774,6 +753,83 @@ static String summonStatsToJson() {
     s += "}";
     return s;
 }
+
+static String systemStatsToJson() {
+  String s = "{";
+  s += "\"fwVersion\":\"" + String(FW_VERSION) + "\"";
+  s += ",\"freeHeap\":"      + String(ESP.getFreeHeap());
+  s += ",\"uptimeS\":"      + String((millis() - bootTime) / 1000);
+  s += ",\"mcpReady\":"     + String(mcpReady  ? "true" : "false");
+  s += ",\"twaiReady\":"    + String(twaiReady ? "true" : "false");
+  s += ",\"rtcBootCount\":" + String((unsigned long)rtcBootCount);
+  s += ",\"otaInProgress\":" + String(otaInProgress ? "true" : "false");
+  s += ",\"otaSuccess\":"    + String(otaSuccess    ? "true" : "false");
+  s += ",\"otaError\":"      + String(otaError      ? "true" : "false");
+  s += ",\"otaErrMsg\":\""   + String(otaErrMsg) + "\"";
+  s += ",\"otaBytes\":"      + String(otaBytes);
+  s += ",\"otaTotal\":"      + String(otaTotal);
+  s += "}";
+  return s;
+}
+
+// ─── OTA update ─────────────────────────────────────────────
+
+static void httpOtaUpload() {
+    HTTPUpload &up = server.upload();
+
+    if (up.status == UPLOAD_FILE_START) {
+        otaInProgress = true;
+        otaSuccess    = false;
+        otaError      = false;
+        otaBytes      = 0;
+        otaErrMsg[0]  = '\0';
+        Serial.printf("[OTA] Start: %s\n", up.filename.c_str());
+
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+            otaError = true;
+            strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
+            Serial.printf("[OTA] begin() failed: %s\n", otaErrMsg);
+        }
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+        if (!otaError && Update.write(up.buf, up.currentSize) != up.currentSize) {
+            otaError = true;
+            strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
+            Serial.printf("[OTA] write() failed: %s\n", otaErrMsg);
+        }
+        otaBytes += up.currentSize;
+    } else if (up.status == UPLOAD_FILE_END) {
+        if (!otaError && Update.end(true)) {
+            otaSuccess = true;
+            otaTotal   = otaBytes;
+            Serial.printf("[OTA] Success: %u bytes\n", up.totalSize);
+        } else if (!otaError) {
+            otaError = true;
+            strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
+            Serial.printf("[OTA] end() failed: %s\n", otaErrMsg);
+        }
+        otaInProgress = false;
+    } else if (up.status == UPLOAD_FILE_ABORTED) {
+        Update.end();
+        otaInProgress = false;
+        otaError      = true;
+        strncpy(otaErrMsg, "aborted", sizeof(otaErrMsg) - 1);
+        Serial.println("[OTA] Aborted");
+    }
+}
+
+static void httpOtaFinish() {
+    bool ok = otaSuccess && !otaError;
+    String resp = String("{\"ok\":") + (ok ? "true" : "false") +
+                  ",\"error\":\"" + String(otaErrMsg) + "\"}";
+    server.sendHeader("Connection", "close");
+    server.send(200, "application/json", resp);
+    if (ok) {
+        delay(700);
+        ESP.restart();
+    }
+}
+
+static void httpSystemStats() { server.send(200, "application/json", systemStatsToJson()); }
 
 static void httpRoot()   { server.send_P(200, "text/html", INDEX_HTML); }
 static void httpNagConfig() { server.send(200, "application/json", nagCfgToJson()); }
@@ -872,6 +928,12 @@ static void httpSummonDisable() {
     summonCfgSave();
     server.send(200, "application/json", summonStatsToJson());
 }
+static void httpSummonForceMode() {
+    portENTER_CRITICAL(&stateMux);
+    forceMode = !forceMode;
+    portEXIT_CRITICAL(&stateMux);
+    server.send(200, "application/json", summonStatsToJson());
+}
 
 static void webTask(void *arg) {
   Serial.println("WiFi: Starting AP...");
@@ -899,6 +961,9 @@ static void webTask(void *arg) {
   server.on("/api/summon/stats",  HTTP_GET,  httpSummonStats);
   server.on("/api/summon/enable", HTTP_POST, httpSummonEnable);
   server.on("/api/summon/disable",HTTP_POST, httpSummonDisable);
+  server.on("/api/summon/forcemode", HTTP_POST, httpSummonForceMode);
+  server.on("/api/system/stats",  HTTP_GET,  httpSystemStats);
+  server.on("/update", HTTP_POST, httpOtaFinish, httpOtaUpload);
   server.begin();
 
   for (;;) {
@@ -1126,10 +1191,6 @@ void setup() {
     delay(3000);
     ESP.restart();
   }
-
-  // BLE
-  bleSetup();
-  xTaskCreatePinnedToCore(bleTask, "ble", 4096, nullptr, 1, nullptr, 0);
 
   Serial.println("BOOT OK");
 }
