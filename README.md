@@ -52,7 +52,6 @@ https://github.com/autowp/arduino-mcp2515
 - The AP name will be something like T2CAN-A1B2 (password: 12345678).  
 - Open 192.168.4.1 in a browser.  
 - Use the tabs to switch between Nag Echo and Summon Unlock.  
-- BLE is also active open URL https://06066060606060.github.io/Summon-Unlock/ in Chrome on Android.
 
 ## Discord server: 
 https://discord.gg/euPbYG8Npc
