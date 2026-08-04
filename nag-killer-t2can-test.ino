@@ -12,23 +12,15 @@
 #include "driver/twai.h"
 #include "index_html.h"
 
-#define FW_VERSION "T2CAN-V2.1"
+#define FW_VERSION "T2CAN-V2.2b"
 
 // T-2CAN board specific
 #include "pin_config.h"
 #include <mcp2515.h>
 #include <SPI.h>
 
-// ═══════════════════════════════════════════════════════════════
-// FORWARD DECLARATIONS (needed for Arduino auto-prototypes)
-// ═══════════════════════════════════════════════════════════════
-
 struct NagConfig;
 struct NagContext;
-
-// ═══════════════════════════════════════════════════════════════
-// SHARED GLOBALS
-// ═══════════════════════════════════════════════════════════════
 
 static unsigned long bootTime = 0;
 static unsigned long canInitTime = 0;
@@ -62,7 +54,13 @@ static const char* resetReasonName(esp_reset_reason_t r) {
 // MCP2515 GLOBALS
 // ═══════════════════════════════════════════════════════════════
 
-static MCP2515 Can_A(MCP2515_CS, 10000000, &SPI);
+static constexpr CAN_CLOCK MCP_CLOCK = MCP_16MHZ;
+
+static constexpr uint32_t MCP_SPI_HZ = 10000000;
+
+static constexpr uint8_t MCP_RX_BUDGET = 32;
+
+static MCP2515 Can_A(MCP2515_CS, MCP_SPI_HZ, &SPI);
 static volatile uint8_t  mcpState = 0;      // 0=OK, 1=WARN, 2=BUS-OFF
 static volatile uint32_t mcpTxOk = 0;
 static volatile uint32_t mcpTxFail = 0;
@@ -977,31 +975,59 @@ static void webTask(void *arg) {
 // CAN TASKS
 // ═══════════════════════════════════════════════════════════════
 
+// Reinitialise proprement le MCP2515 (reset + bitrate + normal mode).
+// Utilise partout la meme constante d'horloge MCP_CLOCK.
+static void mcpReinit() {
+  Can_A.reset();
+  delay(10);                              // >=10 ms apres reset (datasheet)
+  Can_A.setBitrate(CAN_500KBPS, MCP_CLOCK);
+  Can_A.setNormalMode();
+  mcpTxFailConsecutive = 0;
+}
+
 static void canTaskMcp(void* arg) {
   Serial.println("[CAN A] MCP2515 task started");
   for (;;) {
+    // ── Lecture BORNEE ──
+    // On ne draine jamais plus de MCP_RX_BUDGET trames sans rendre la
+    // main. Si un buffer RX se coince (overflow non efface -> meme
+    // trame renvoyee en boucle), la tache sort quand meme : plus de
+    // boucle infinie -> plus de freeze / watchdog.
     struct can_frame rxf;
-    while (Can_A.readMessage(&rxf) == MCP2515::ERROR_OK) {
+    uint8_t budget = MCP_RX_BUDGET;
+    while (budget-- && Can_A.readMessage(&rxf) == MCP2515::ERROR_OK) {
       mcpRxCount++;
       nagProcessMcpFrame(rxf);
     }
 
-    // MCP2515 status check (using public API only)
+    // ── Verification d'etat / recovery (1 Hz) ──
     unsigned long now = millis();
     if (now - lastMcpStatusMs >= 1000) {
       lastMcpStatusMs = now;
+
+      // Lire les VRAIS flags d'erreur du MCP2515 (registre EFLG).
+      uint8_t eflg = Can_A.getErrorFlags();
+
+      // 1) Overflow RX : DOIT etre efface, sinon le controleur cesse
+      //    de recevoir dans ce buffer -> le nag semble "fige".
+      if (eflg & (MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR)) {
+        Can_A.clearRXnOVR();
+        Serial.println("[CAN A] RX overflow flags cleared");
+      }
+
+      // 2) Bus-off REEL via EFLG_TXBO (pas seulement les TX fails).
       uint8_t consecutive = mcpTxFailConsecutive;
-      if (consecutive > 5) {
+      bool busOff = (eflg & MCP2515::EFLG_TXBO) || (consecutive > 5);
+
+      if (busOff) {
         mcpState = 2; // BUS-OFF
         if (now - lastMcpRecoverMs > 3000) {
           lastMcpRecoverMs = now;
-          Serial.println("[CAN A] MCP2515 bus-off detected (TX fails), resetting...");
-          Can_A.reset();
-          Can_A.setBitrate(CAN_500KBPS);
-          Can_A.setNormalMode();
-          mcpTxFailConsecutive = 0;
+          Serial.printf("[CAN A] MCP2515 bus-off (eflg=0x%02X txFailSeq=%u), reset...\n",
+                        eflg, consecutive);
+          mcpReinit();
         }
-      } else if (consecutive > 0) {
+      } else if (consecutive > 0 || (eflg & (MCP2515::EFLG_TXWAR | MCP2515::EFLG_RXWAR))) {
         mcpState = 1; // Warning
       } else {
         mcpState = 0; // OK
@@ -1141,10 +1167,13 @@ void setup() {
   SPI.begin(MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI, MCP2515_CS);
 
   Can_A.reset();
-  Can_A.setBitrate(CAN_500KBPS);
+  delay(10);                              // >=10 ms apres reset (datasheet)
+  Can_A.setBitrate(CAN_500KBPS, MCP_CLOCK);
   Can_A.setNormalMode();
   mcpReady = true;
-  Serial.println("[CAN A] MCP2515 ready (500 kbps)");
+  Serial.printf("[CAN A] MCP2515 ready (500 kbps, clk=%s)\n",
+                (MCP_CLOCK == MCP_16MHZ) ? "16MHz" :
+                (MCP_CLOCK == MCP_8MHZ)  ? "8MHz" : "20MHz");
 
   // ══ Init CAN B (TWAI) ══
   Serial.println("[CAN B] Initializing TWAI...");
