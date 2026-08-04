@@ -1,10 +1,13 @@
 
-# Nag-killer & Eu-Summon-Unlock V2.1 for LilyGO/T-2Can
+# Nag-killer & Eu-Summon-Unlock V2.2b for LilyGO/T-2Can
 
 > ⚠️ Research / educational firmware only.
 >
 > This project interacts with a vehicle CAN bus. It is intended for controlled bench testing, code review, and research environments only.It sends signals directly to the controller, not a physical command to the steering wheel. Do not use this on public roads or in any situation where unsafe behavior could put people or property at risk. You are responsible for your own testing, wiring, configuration, and local laws.
 ---
+
+## 2.2b Update
+- Fix Nag-Killer crash
 
 ## What V2.1 Update Changes
 
