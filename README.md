@@ -71,6 +71,7 @@ https://discord.gg/euPbYG8Npc
 - ESP32 TWAI driver by Espressif Systems
 - Automotive CAN research community
 
-<img width="230" height="551" alt="summon" src="https://github.com/user-attachments/assets/d8c8b306-8155-48e1-bacd-6af79aef1c88" />
+<img width="471" height="760" alt="image" src="https://github.com/user-attachments/assets/b0663d9f-4e92-4fb0-9cbd-e9eb729d3dc5" />
+
 
 
