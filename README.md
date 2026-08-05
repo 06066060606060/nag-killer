@@ -17,8 +17,9 @@
 - expanded lateral acceleration limits  
 - lane changes near forks isn't disabled (EAP)  
 - instantaneous lane change on blinker (EAP)  
-- no lane change timeout once initiated (EAP)  
+- no lane change timeout once initiated (EAP)*  
 - takes forks and exits automatically (EAP)  
+- Continue on Green with Car in Front
 
 ## Hardware Target
 
@@ -47,7 +48,7 @@ https://github.com/autowp/arduino-mcp2515
 - pin_config.h  
 
 ## Wiring
-- CAN A (MCP2515): connect to the bus carrying 0x370 / 0x399 / 0x129 Party CAN - Nag Killer (2-3)
+- CAN A (MCP2515): connect to the bus carrying 880 / 921 / 297 Party CAN - Nag Killer (2-3)
 - CAN B (TWAI): connect to the bus carrying 280 / 390 / 921 / 1016 / 1021 Chassis CAN - Summon Unlock (13-14)
 
 ## Dashboard Notes
