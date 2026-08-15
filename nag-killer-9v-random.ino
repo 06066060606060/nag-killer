@@ -11,9 +11,9 @@
 Arudino Board Setup for Waveshare ESP32-S3-RS485-CAN
 https://www.waveshare.com/wiki/ESP32-S3-RS485-CAN#Arduino_Project_Parameter_Setting
 ESP32 S3 Dev Module
-USB CDC On Boot Disabled
+USB CDC On Boot: Enabled (needed for serial debug)
 Flash Size 16MB
-Partition Scheme: 16M Flash (3BM App/9.9MB FATFS)
+Partition Scheme: Custom (needed for OTA)
 PSRAM: OPI PSRAM
 
 */
@@ -29,8 +29,8 @@ PSRAM: OPI PSRAM
 
 #include <ElegantOTASync.h>            // From Arduino library manager, install "ElegantOTA by Ayush Sharma", v3 or higher, but modified for Sync use
 
-#define CAN_TX_PIN    16			// 5 for SN65HVD230 or ATOMIC CANBus Base, 16 for SIT1050T Waveshare ESP32-S3-RS4850-CAN
-#define CAN_RX_PIN    15			// 6 for SN65HVD230 or ATOMIC CANBus Base, 15 for SIT1050T Waveshare ESP32-S3-RS4850-CAN
+#define CAN_TX_PIN    15			// 5 for SN65HVD230 or ATOMIC CANBus Base, 15 for SIT1050T Waveshare ESP32-S3-RS4850-CAN
+#define CAN_RX_PIN    16			// 6 for SN65HVD230 or ATOMIC CANBus Base, 16 for SIT1050T Waveshare ESP32-S3-RS4850-CAN
 
 // ── Safety hard caps (NOT user-overridable) ─────────────────────
 static const uint16_t TORQUE_RAW_MAX = 0x8B6;
