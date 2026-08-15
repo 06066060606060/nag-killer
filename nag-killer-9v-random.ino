@@ -44,7 +44,7 @@ static const unsigned long DRIVER_WAKE_DELAY_MS = 10000;  // #1: Before CAN init
 static const unsigned long INJECTION_DELAY_MS = 15000;    // After CAN init
 
 // ── Modes ───────────────────────────────────────────────────────
-enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_CUSTOM = 2, MODE_C = 3 };
+enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_C = 2 };
 
 // ── Runtime config (persisted to NVS) ───────────────────────────
 struct Config {
@@ -261,7 +261,7 @@ static void cfgLoad() {
   if (n == 0) { cfg.torqueB3[0] = 0xB6; }
   
   cfg.hoRatePct      = prefs.getUChar("ho", 100);
-  cfg.burstMs        = prefs.getUShort("bms", 1000);
+  cfg.burstMs        = prefs.getUShort("bms", 2300);
   cfg.pauseMs        = prefs.getUShort("pms", 1500);
   cfg.apStateId      = prefs.getUShort("apid", 0x399);
   cfg.steeringId     = prefs.getUShort("stid", 0x129);
@@ -347,7 +347,7 @@ static bool decideInjection(const twai_message_t& src,
     prevMode = mode;
   }
 
-  if (mode == MODE_A || mode == MODE_CUSTOM) {
+  if (mode == MODE_A) {
     out_b2 = tB2[tIdx % tCount];
     out_b3 = tB3[tIdx % tCount];
     tIdx++;
@@ -668,7 +668,7 @@ static void httpStats()  { server.send(200, "application/json", statsToJson()); 
 static void httpSetMode() {
   int m = server.arg("m").toInt();
   Config nc;
-  if (m == 3) cfgDefaultsModeC(nc);
+  if (m == 2) cfgDefaultsModeC(nc);
   else if (m == 1) cfgDefaultsModeB(nc);
   else        cfgDefaultsModeA(nc);
   

@@ -109,7 +109,7 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     font-weight: 600;
   }
   .stat .v {
-    font-size: 22px;
+    font-size: 18px;
     font-weight: 700;
     margin-top: 6px;
     color: var(--txt);
@@ -289,8 +289,8 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       <div class="stat"><div class="k">Echo Sent</div><div class="v" id="s_echo">0</div></div>
       <div class="stat"><div class="k">TX OK / Fail</div><div class="v" id="s_tx">0/0</div></div>
       <div class="stat"><div class="k">Last Latency</div><div class="v" id="s_lat">—</div></div>
-      <div class="stat"><div class="k">HandsOn (real)</div><div class="v" id="s_ho">—</div></div>
       <div class="stat"><div class="k">Torque (real)</div><div class="v" id="s_tq">—</div></div>
+      <div class="stat"><div class="k">HandsOn (real)</div><div class="v" id="s_ho">—</div></div>
       <div class="stat"><div class="k">Last Injected</div><div class="v" id="s_inj">—</div></div>
       <div class="stat"><div class="k">CAN State</div><div class="v" id="s_cs">—</div></div>
       <div class="stat full"><div class="k">Uptime</div><div class="v" id="s_up">—</div></div>
@@ -300,15 +300,15 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   <section class="panel">
     <h2>Mode</h2>
     <div class="modes">
-      <button id="modeA" class="primary">A-Simple</button>
-      <button id="modeB">B-TSL6P burst/pause</button>
-      <button id="modeC">Random walk burst/pause</button>
+      <button id="modeA" class="primary">A - Simple</button>
+      <button id="modeB">B - TSL6P burst/pause</button>
+      <button id="modeC">C - Random walk burst/pause</button>
       <button id="modeR" class="danger">Reset</button>
     </div>
     <div class="desc">
-      <b>A</b>: CAN 0x370, fixed +1.80 Nm, handsOn=1 always. Proven on MY 2022 HW3 pre-Juniper.<br>
-      <b>B</b>: Configurable target CAN ID, 8-value torque cycle, burst injection for <span id="lbl_burst">1000</span> ms followed by a <span id="lbl_pause">1500</span> ms pause.
-      <b>C</b>: Random walk +1.48 to +1.78 Nm, Configurable CAN ID, burst injection for <span id="lbl_burst">1000</span> ms followed by a <span id="lbl_pause">1500</span> ms pause.
+      <b>A</b>: CAN 0x370, fixed +1.80 Nm, handsOn=1 always. Simple, works on HW3 v12.<br>
+      <b>B</b>: Configurable target CAN ID, 8-value torque cycle, burst injection for <span id="lbl_burst">1000</span> ms followed by a <span id="lbl_pause">1500</span> ms pause. Emulates TSL6P.<br>
+      <b>C</b>: Random walk between +1.48 and +1.78 Nm, Configurable CAN ID, burst injection for <span id="lbl_burst2">1000</span> ms followed by a <span id="lbl_pause2">1500</span> ms pause. Random Nm to obscure usage.
     </div>
   </section>
 
@@ -409,9 +409,11 @@ function renderConfig() {
   $('f_burst').value = cfg.burstMs;
   $('f_pause').value = cfg.pauseMs;
   $('lbl_burst').textContent = cfg.burstMs;
+  $('lbl_burst2').textContent = cfg.burstMs;
   $('lbl_pause').textContent = cfg.pauseMs;
+  $('lbl_pause2').textContent = cfg.pauseMs;
   $('toggle').textContent = cfg.enabled ? 'Disable' : 'Enable';
-  ['modeA','modeB','modeC'].forEach((id,m) => $(id).classList.toggle('primary', cfg.mode === m));
+  ['modeA','modeB','modeC'].forEach((id,m) => $(id).classList.toggle('primary', Number(cfg.mode) === m));
   renderTorque();
 }
 
@@ -456,7 +458,7 @@ async function tickStats() {
     $('s_lat').textContent  = s.latUs ? (s.latUs + ' µs') : '—';
     $('s_ho').textContent   = s.ho != null ? s.ho : '—';
     $('s_tq').textContent   = s.torque != null ? ((s.torque>=0?'+':'') + s.torque.toFixed(2) + ' Nm') : '—';
-    $('s_inj').textContent  = s.injNm != null ? ((s.injNm>=0?'+':'') + s.injNm.toFixed(2) + ' Nm  ho=' + s.injHo) : '—';
+    $('s_inj').innerHTML    = s.injNm != null ? ((s.injNm>=0?'+':'') + s.injNm.toFixed(2) + ' Nm<br>ho=' + s.injHo) : '—';
     const cs = ['stopped','running','bus-off','recovering'][s.canState] || s.canState;
     $('s_cs').textContent = cs;
     $('s_cs').className = 'v ' + (s.canState===1?'ok':s.canState===2?'bad':'warn');
@@ -521,7 +523,7 @@ $('tq_del').disabled = true;
 
 $('modeA').onclick  = () => setMode(0);
 $('modeB').onclick  = () => setMode(1);
-$('modeC').onclick  = () => setMode(3);
+$('modeC').onclick  = () => setMode(2);
 $('modeR').onclick  = async () => {
   if (!cfg) { showToast('not ready'); return; }
   if (!confirm('Reset all settings to Mode A defaults?')) return;
