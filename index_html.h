@@ -78,10 +78,10 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 20px;
-    padding: 18px;
+    padding: 14px;
   }
   .panel h2 {
-    margin: 0 0 14px;
+    margin: 0 0 12px;
     font-size: 14px;
     font-weight: 700;
     color: var(--txt);
@@ -89,14 +89,15 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   .row {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 10px;
+    column-gap: 9px;
+    row-gap: 7px;
   }
   .stat {
     background: var(--card);
     border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 14px 12px;
-    min-height: 80px;
+    border-radius: 12px;
+    padding: 8px 10px;
+    min-height: 58px;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -111,7 +112,7 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   .stat .v {
     font-size: 18px;
     font-weight: 700;
-    margin-top: 6px;
+    margin-top: 3px;
     color: var(--txt);
     letter-spacing: -0.02em;
   }
