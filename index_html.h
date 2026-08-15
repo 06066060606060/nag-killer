@@ -302,11 +302,13 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     <div class="modes">
       <button id="modeA" class="primary">A-Simple</button>
       <button id="modeB">B-TSL6P burst/pause</button>
+      <button id="modeC">Random walk burst/pause</button>
       <button id="modeR" class="danger">Reset</button>
     </div>
     <div class="desc">
       <b>A</b>: CAN 0x370, fixed +1.80 Nm, handsOn=1 always. Proven on MY 2022 HW3 pre-Juniper.<br>
-      <b>B</b>: Configurable target CAN ID, 4-value torque cycle, burst injection for <span id="lbl_burst">1000</span> ms followed by a <span id="lbl_pause">1500</span> ms pause.
+      <b>B</b>: Configurable target CAN ID, 8-value torque cycle, burst injection for <span id="lbl_burst">1000</span> ms followed by a <span id="lbl_pause">1500</span> ms pause.
+      <b>C</b>: Random walk +1.48 to +1.78 Nm, Configurable CAN ID, burst injection for <span id="lbl_burst">1000</span> ms followed by a <span id="lbl_pause">1500</span> ms pause.
     </div>
   </section>
 
@@ -319,10 +321,10 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
         <label>Target CAN ID (hex)
           <input type="text" id="f_id" placeholder="0x370">
         </label>
-        <label>Burst (ms, mode B)
+        <label>Burst (ms, mode B/C)
           <input type="number" id="f_burst" min="50" max="10000" step="50">
         </label>
-        <label>Pause (ms, mode B)
+        <label>Pause (ms, mode B/C)
           <input type="number" id="f_pause" min="0" max="10000" step="50">
         </label>
       </div>
@@ -409,7 +411,7 @@ function renderConfig() {
   $('lbl_burst').textContent = cfg.burstMs;
   $('lbl_pause').textContent = cfg.pauseMs;
   $('toggle').textContent = cfg.enabled ? 'Disable' : 'Enable';
-  ['modeA','modeB'].forEach((id,m) => $(id).classList.toggle('primary', cfg.mode === m));
+  ['modeA','modeB','modeC'].forEach((id,m) => $(id).classList.toggle('primary', cfg.mode === m));
   renderTorque();
 }
 
@@ -423,6 +425,7 @@ async function loadConfig() {
     $('apply').disabled = false;
     $('modeA').disabled = false;
     $('modeB').disabled = false;
+    $('modeC').disabled = false;
     $('modeR').disabled = false;
     $('tq_add').disabled = false;
     $('tq_del').disabled = false;
@@ -511,12 +514,14 @@ async function applyOverrides() {
 
 $('modeA').disabled = true;
 $('modeB').disabled = true;
+$('modeC').disabled = true;
 $('modeR').disabled = true;
 $('tq_add').disabled = true;
 $('tq_del').disabled = true;
 
 $('modeA').onclick  = () => setMode(0);
 $('modeB').onclick  = () => setMode(1);
+$('modeC').onclick  = () => setMode(3);
 $('modeR').onclick  = async () => {
   if (!cfg) { showToast('not ready'); return; }
   if (!confirm('Reset all settings to Mode A defaults?')) return;

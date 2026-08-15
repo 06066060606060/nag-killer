@@ -8,6 +8,15 @@
     Hard safety cap: torque is clamped to ±1.80 Nm in firmware,
     cannot be overridden from the dashboard.
 
+Arudino Board Setup for Waveshare ESP32-S3-RS485-CAN
+https://www.waveshare.com/wiki/ESP32-S3-RS485-CAN#Arduino_Project_Parameter_Setting
+ESP32 S3 Dev Module
+USB CDC On Boot Disabled
+Flash Size 16MB
+Partition Scheme: 16M Flash (3BM App/9.9MB FATFS)
+PSRAM: OPI PSRAM
+
+
 
 */
 
@@ -20,8 +29,8 @@
 #include "driver/twai.h"
 #include "index_html.h"
 
-#define CAN_TX_PIN    5
-#define CAN_RX_PIN    6
+#define CAN_TX_PIN    16			// 5 for SN65HVD230 or ATOMIC CANBus Base, 16 for SIT1050T Waveshare ESP32-S3-RS4850-CAN
+#define CAN_RX_PIN    15			// 6 for SN65HVD230 or ATOMIC CANBus Base, 15 for SIT1050T Waveshare ESP32-S3-RS4850-CAN
 
 // ── Safety hard caps (NOT user-overridable) ─────────────────────
 static const uint16_t TORQUE_RAW_MAX = 0x8B6;
@@ -35,7 +44,7 @@ static const unsigned long DRIVER_WAKE_DELAY_MS = 10000;  // #1: Before CAN init
 static const unsigned long INJECTION_DELAY_MS = 15000;    // After CAN init
 
 // ── Modes ───────────────────────────────────────────────────────
-enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_CUSTOM = 2 };
+enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_CUSTOM = 2, MODE_C = 3 };
 
 // ── Runtime config (persisted to NVS) ───────────────────────────
 struct Config {
@@ -98,6 +107,8 @@ static unsigned long lastStatusLog = 0;
 static unsigned long lastNoCanWarn = 0;  // #2: For log throttling
 static unsigned long lastTxFailLog = 0;  // Throttle TX fail logs
 
+static uint8_t previousB3 = 0xA7;        // midpoint B3 for torque values between 0x98 and 0xB6 (1.48nm - 1.78nm)
+
 // ── Heartbeat counters (#4) ─────────────────────────────────────
 static volatile uint32_t canBeat = 0;
 static volatile uint32_t canRxBeat = 0;
@@ -127,7 +138,7 @@ static Preferences prefs;
 
 static void cfgSetCommonDefaults(Config& c) {
   c.enabled        = true;
-  c.burstMs        = 1000;
+  c.burstMs        = 2000;    // was 1000
   c.pauseMs        = 1500;
   c.apStateId      = 0x399;
   c.apStateByte    = 0;
@@ -156,14 +167,32 @@ static void cfgDefaultsModeB(Config& c) {
   cfgSetCommonDefaults(c);
   c.mode        = MODE_B;
   c.targetId    = 0x370;
-  c.torqueCount = 4;
+  c.torqueCount = 8;
   c.torqueB2[0] = 0x08; c.torqueB3[0] = 0xB6;
-  c.torqueB2[1] = 0x08; c.torqueB3[1] = 0x98;
-  c.torqueB2[2] = 0x07; c.torqueB3[2] = 0x6C;
-  c.torqueB2[3] = 0x07; c.torqueB3[3] = 0x4E;
+  c.torqueB2[1] = 0x08; c.torqueB3[1] = 0xAC;
+  c.torqueB2[2] = 0x08; c.torqueB3[2] = 0xA2;
+  c.torqueB2[3] = 0x08; c.torqueB3[3] = 0xB4;
+  c.torqueB2[4] = 0x08; c.torqueB3[4] = 0xAF;
+  c.torqueB2[5] = 0x08; c.torqueB3[5] = 0xB6;
+  c.torqueB2[6] = 0x08; c.torqueB3[6] = 0xB1;
+  c.torqueB2[7] = 0x08; c.torqueB3[7] = 0xB5;
   c.hoRatePct   = 100;
 }
-
+static void cfgDefaultsModeC(Config& c) {
+  cfgSetCommonDefaults(c);
+  c.mode        = MODE_C;
+  c.targetId    = 0x370;
+  c.torqueCount = 8;
+  c.torqueB2[0] = 0x08; c.torqueB3[0] = 0xB6;
+  c.torqueB2[1] = 0x08; c.torqueB3[1] = 0xAC;
+  c.torqueB2[2] = 0x08; c.torqueB3[2] = 0xA2;
+  c.torqueB2[3] = 0x08; c.torqueB3[3] = 0xB4;
+  c.torqueB2[4] = 0x08; c.torqueB3[4] = 0xAF;
+  c.torqueB2[5] = 0x08; c.torqueB3[5] = 0xB6;
+  c.torqueB2[6] = 0x08; c.torqueB3[6] = 0xB1;
+  c.torqueB2[7] = 0x08; c.torqueB3[7] = 0xB5;
+  c.hoRatePct   = 100;
+}
 static void clampTorque(uint8_t& b2, uint8_t& b3) {
   uint16_t raw = ((b2 & 0x0F) << 8) | b3;
   if (raw > TORQUE_RAW_MAX) raw = TORQUE_RAW_MAX;
@@ -266,6 +295,21 @@ static void cfgSave() {
 
 }
 
+// Adding random walk torque variation between 1.48-1.78nm (0x0898 - 0x08B6, or 0x98 - 0xB6 for B3)
+static void update_torqueB3(void)
+{
+    int step = (rand() % 11) - 5;   // -5 .. +5
+    int value = (int)previousB3 + step;
+
+    if (value < 0x98)       // corresponds to 1.48nm (might need to increase)
+        value = 0x98;
+    else if (value > 0xB6)  // corresponds to 1.78nm (limit)
+        value = 0xB6;
+
+    previousB3 = (uint8_t)value;
+}
+
+
 static bool decideInjection(const twai_message_t& src,
                             uint8_t& out_b2, uint8_t& out_b3, bool& out_setHo) {
   if (src.data_length_code < 8) return false;
@@ -325,6 +369,22 @@ static bool decideInjection(const twai_message_t& src,
     }
     out_b2 = tB2[tIdx];
     out_b3 = tB3[tIdx];
+    out_setHo = true;
+    return true;
+  }
+
+  if (mode == MODE_C) {
+    uint32_t cycleMs = (uint32_t)burstMs + (uint32_t)pauseMs;
+    if (cycleMs == 0) cycleMs = 1;
+    uint32_t phase = (uint32_t)(now - bootTime) % cycleMs;
+    if (phase >= burstMs) return false;
+    
+    if (now - lastChangeMs >= 200) { 
+      update_torqueB3(); 
+      lastChangeMs = now; 
+    }
+    out_b2 = 0x08;
+    out_b3 = previousB3;
     out_setHo = true;
     return true;
   }
@@ -608,7 +668,8 @@ static void httpStats()  { server.send(200, "application/json", statsToJson()); 
 static void httpSetMode() {
   int m = server.arg("m").toInt();
   Config nc;
-  if (m == 1) cfgDefaultsModeB(nc);
+  if (m == 3) cfgDefaultsModeC(nc);
+  else if (m == 1) cfgDefaultsModeB(nc);
   else        cfgDefaultsModeA(nc);
   
   portENTER_CRITICAL(&cfgMux); 
