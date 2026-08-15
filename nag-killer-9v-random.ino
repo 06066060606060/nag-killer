@@ -16,8 +16,6 @@ Flash Size 16MB
 Partition Scheme: 16M Flash (3BM App/9.9MB FATFS)
 PSRAM: OPI PSRAM
 
-
-
 */
 
 #include <Arduino.h>
@@ -28,6 +26,8 @@ PSRAM: OPI PSRAM
 #include <esp_system.h>
 #include "driver/twai.h"
 #include "index_html.h"
+
+#include <ElegantOTASync.h>            // From Arduino library manager, install "ElegantOTA by Ayush Sharma", v3 or higher, but modified for Sync use
 
 #define CAN_TX_PIN    16			// 5 for SN65HVD230 or ATOMIC CANBus Base, 16 for SIT1050T Waveshare ESP32-S3-RS4850-CAN
 #define CAN_RX_PIN    15			// 6 for SN65HVD230 or ATOMIC CANBus Base, 15 for SIT1050T Waveshare ESP32-S3-RS4850-CAN
@@ -138,7 +138,7 @@ static Preferences prefs;
 
 static void cfgSetCommonDefaults(Config& c) {
   c.enabled        = true;
-  c.burstMs        = 2000;    // was 1000
+  c.burstMs        = 2300;    // was 1000
   c.pauseMs        = 1500;
   c.apStateId      = 0x399;
   c.apStateByte    = 0;
@@ -170,11 +170,11 @@ static void cfgDefaultsModeB(Config& c) {
   c.torqueCount = 8;
   c.torqueB2[0] = 0x08; c.torqueB3[0] = 0xB6;
   c.torqueB2[1] = 0x08; c.torqueB3[1] = 0xAC;
-  c.torqueB2[2] = 0x08; c.torqueB3[2] = 0xA2;
-  c.torqueB2[3] = 0x08; c.torqueB3[3] = 0xB4;
-  c.torqueB2[4] = 0x08; c.torqueB3[4] = 0xAF;
+  c.torqueB2[2] = 0x08; c.torqueB3[2] = 0xB4;
+  c.torqueB2[3] = 0x08; c.torqueB3[3] = 0xA2;
+  c.torqueB2[4] = 0x08; c.torqueB3[4] = 0xB5;
   c.torqueB2[5] = 0x08; c.torqueB3[5] = 0xB6;
-  c.torqueB2[6] = 0x08; c.torqueB3[6] = 0xB1;
+  c.torqueB2[6] = 0x08; c.torqueB3[6] = 0xAF;
   c.torqueB2[7] = 0x08; c.torqueB3[7] = 0xB5;
   c.hoRatePct   = 100;
 }
@@ -795,10 +795,41 @@ static void webTask(void* arg) {
   server.on("/api/mode",   HTTP_POST, httpSetMode);
   server.on("/api/update", HTTP_POST, httpUpdate);
   server.on("/api/reset",  HTTP_POST, httpReset);
+
+  ElegantOTA.onStart([]() {
+    Serial.println("OTA update process started.");
+  });
+  ElegantOTA.onProgress([](size_t current, size_t final) {
+    Serial.printf("Progress: %u%%\n", (current * 100) / final);
+  });
+
+  ElegantOTA.onEnd([](bool success) {
+    if (success) {
+      Serial.println("OTA update completed successfully.");
+    } else {
+      Serial.println("OTA update failed.");
+    }
+  });
+  ElegantOTA.begin(&server);             // Adds OTA server, must be before server.begin().  OTA is available at http://<myipaddress>/update
+  ElegantOTA.setAuth("update", "we9v");  // Adds authentication, username update, password we9v, must be after .begin
+
+  // Redirect /ota and /upload to /update (ElegantOTA page)
+  server.on("/ota", HTTP_GET, []() {
+      server.sendHeader("Location", "/update");
+      server.send(302, "text/plain", "");
+  });
+
+  server.on("/upload", HTTP_GET, []() {
+      server.sendHeader("Location", "/update");
+      server.send(302, "text/plain", "");
+  });
+
+
   server.begin();
 
   for (;;) {
     server.handleClient();
+    ElegantOTA.loop();
     webBeat++;  // #4: Heartbeat
     vTaskDelay(1);
   }
