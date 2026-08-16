@@ -31,7 +31,7 @@ This fork was adapted for:
 | ---------------------------- | ------------------------------- | ----------------- | ------------ | ------------------------- |
 | ESP32-S3-WROOM-1             | SN65HVD230 3.3V module          | GPIO 4 / GPIO 5   | 500 kbps CAN | USB-C or stable 5V supply |
 | AtomS3 Lite ESP32S3          | ATOMIC CANBus Base (CA-IS3050G) | GPIO 6 / GPIO 5   | 500 kbps CAN | USB-C or stable 5V supply |
-| Waveshare ESP32-S3-RS485-CAN | SIT1050T                        | GPIO 15 / GPIO 16 | 500 kbps CAN | USB-C or 7-36V supply     |
+| Waveshare ESP32-S3-RS485-CAN | SIT1050T                        | GPIO 16 / GPIO 15 | 500 kbps CAN | USB-C or 7-36V supply     |
 
 
 ### Pin Definitions
