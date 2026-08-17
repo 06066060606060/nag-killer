@@ -226,19 +226,19 @@ static void cfgLoad() {
   
   if (err != ESP_OK) {
     Serial.printf("NVS: Init failed %d, using defaults\n", err);
-    cfgDefaultsModeA(cfg);
+    cfgDefaultsModeB(cfg);
     return;
   }
   
   if (!prefs.begin("nag", true)) {
     Serial.println("NVS: No existing config, using defaults");
-    cfgDefaultsModeA(cfg);
+    cfgDefaultsModeB(cfg);
     return;
   }
   
   if (!prefs.isKey("v")) {
     prefs.end();
-    cfgDefaultsModeA(cfg);
+    cfgDefaultsModeB(cfg);
     return;
   }
   
@@ -758,7 +758,7 @@ static void httpUpdate() {
 
 static void httpReset() {
   Config nc; 
-  cfgDefaultsModeA(nc);
+  cfgDefaultsModeB(nc);
   portENTER_CRITICAL(&cfgMux); 
   cfg = nc; 
   portEXIT_CRITICAL(&cfgMux);
