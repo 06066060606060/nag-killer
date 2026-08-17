@@ -182,15 +182,8 @@ static void cfgDefaultsModeC(Config& c) {
   cfgSetCommonDefaults(c);
   c.mode        = MODE_C;
   c.targetId    = 0x370;
-  c.torqueCount = 8;
+  c.torqueCount = 1;
   c.torqueB2[0] = 0x08; c.torqueB3[0] = 0xB6;
-  c.torqueB2[1] = 0x08; c.torqueB3[1] = 0xAC;
-  c.torqueB2[2] = 0x08; c.torqueB3[2] = 0xA2;
-  c.torqueB2[3] = 0x08; c.torqueB3[3] = 0xB4;
-  c.torqueB2[4] = 0x08; c.torqueB3[4] = 0xAF;
-  c.torqueB2[5] = 0x08; c.torqueB3[5] = 0xB6;
-  c.torqueB2[6] = 0x08; c.torqueB3[6] = 0xB1;
-  c.torqueB2[7] = 0x08; c.torqueB3[7] = 0xB5;
   c.hoRatePct   = 100;
 }
 static void clampTorque(uint8_t& b2, uint8_t& b3) {
@@ -295,17 +288,18 @@ static void cfgSave() {
 
 }
 
-// Adding random walk torque variation between 1.48-1.78nm (0x0898 - 0x08B6, or 0x98 - 0xB6 for B3)
+// Adding random torque variation between ~1.5-1.8nm (0x0898 - 0x08B6, or 0x98 - 0xB6 for B3)
 static void update_torqueB3(void)
 {
-    int step = (rand() % 11) - 5;   // -5 .. +5
-    int value = (int)previousB3 + step;
-
-    if (value < 0x98)       // corresponds to 1.48nm (might need to increase)
-        value = 0x98;
-    else if (value > 0xB6)  // corresponds to 1.78nm (limit)
-        value = 0xB6;
-
+    uint8_t minT = 0x98;    // corresponds to ~1.5nm (might need to increase)
+    uint8_t maxT = 0xB6;    // corresponds to ~1.8nm
+    uint8_t biaspoint = 0xAE; // biased to about 75% of range, so more high values than low
+    
+    int offset = (rand() % 41) - 20;   // -20 .. +20, negative spread must be at least the difference between biaspoint and minT.  Statistically speaking, ~29% of the time will be clamped at maxT.
+    int value = (int)biaspoint + offset;
+    
+    if (value < minT) value = minT;
+    else if (value > maxT) value = maxT;
     previousB3 = (uint8_t)value;
 }
 
@@ -545,11 +539,17 @@ static void canTask(void* arg) {
       bool isOurs = false;
       if (ho == 1) {
         portENTER_CRITICAL(&cfgMux);
-        for (uint8_t i = 0; i < cfg.torqueCount; i++) {
-          uint16_t cfgRaw = ((cfg.torqueB2[i] & 0x0F) << 8) | cfg.torqueB3[i];
-          if (tRaw == cfgRaw) { 
-            isOurs = true; 
-            break; 
+        mode    = cfg.mode;
+        if (mode == MODE_C) {
+          uint16_t cfgRaw = ((0x08 & 0x0F) << 8) | previousB3;
+          if (tRaw == cfgRaw) isOurs = true;
+        } else {
+          for (uint8_t i = 0; i < cfg.torqueCount; i++) {
+            uint16_t cfgRaw = ((cfg.torqueB2[i] & 0x0F) << 8) | cfg.torqueB3[i];
+            if (tRaw == cfgRaw) { 
+              isOurs = true; 
+              break; 
+            }
           }
         }
         portEXIT_CRITICAL(&cfgMux);
@@ -559,7 +559,7 @@ static void canTask(void* arg) {
       bool bootDelayPassed = (millis() - canInitTime) >= INJECTION_DELAY_MS;
       bool canSeen = canAnyFrames > 1000;
       
-      if (en && bootDelayPassed && canSeen && !isOurs && ho <= 1) {
+      if (en && bootDelayPassed && canSeen && !isOurs && ho <= 2) {
         echoModified(f);
       }
     }
