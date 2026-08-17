@@ -539,7 +539,7 @@ static void canTask(void* arg) {
       bool isOurs = false;
       if (ho == 1) {
         portENTER_CRITICAL(&cfgMux);
-        mode    = cfg.mode;
+        uint8_t mode = cfg.mode;
         if (mode == MODE_C) {
           uint16_t cfgRaw = ((0x08 & 0x0F) << 8) | previousB3;
           if (tRaw == cfgRaw) isOurs = true;
