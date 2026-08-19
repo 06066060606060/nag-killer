@@ -11,6 +11,9 @@
 
 */
 
+// Active/désactive le log CAN → port série (format CSV)
+#define CAN_SERIAL_LOG 1
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -19,13 +22,14 @@
 #include <esp_system.h>
 #include "driver/twai.h"
 #include "index_html.h"
+
+#if CAN_SERIAL_LOG
 #include <freertos/queue.h>
+#endif
 
 #define CAN_TX_PIN    5
 #define CAN_RX_PIN    6
 
-// Active/désactive le log CAN → port série (format CSV)
-#define CAN_SERIAL_LOG 1
 
 // ── Safety hard caps (NOT user-overridable) ─────────────────────
 static const uint16_t TORQUE_RAW_MAX = 0x8B6;
@@ -515,6 +519,12 @@ static void updateSteering(const twai_message_t& f) {
 // réveil du bus CAN). On découple donc : canTask pousse dans une file
 // (non bloquant, on jette la trame si la file est pleine plutôt que
 // d'attendre) et une tâche dédiée à basse priorité vide la file vers Serial.
+
+// Filter ID list.  Include a comma separated list of values, such as { 0x370, 0x248 }
+const bool enable_filter = true;		// set to false to pass all CAN IDs
+const uint32_t filter_list[] = { 0x370, 0x248 };
+const size_t filter_count = sizeof(filter_list) / sizeof(filter_list[0]);
+
 typedef struct {
   unsigned long ts;
   uint32_t id;
@@ -559,6 +569,19 @@ static void canLogTask(void *arg) {
     }
   }
 }
+
+static bool isFilterMatch(uint32_t id) {
+  if (enable_filter == 0)
+    return true; // pass all IDs
+
+  for (size_t i = 0; i < filter_count; i++) {
+    if (filter_list[i] == id)
+      return true;
+  }
+
+  return false;
+}
+
 #endif
 
 static void canTask(void* arg) {
@@ -578,7 +601,9 @@ static void canTask(void* arg) {
     
     while (twai_receive(&f, pdMS_TO_TICKS(2)) == ESP_OK) {
 #if CAN_SERIAL_LOG
-      logCanFrame(f);   // journalise TOUTES les trames reçues sur le bus
+			if (isFilterMatch(f.identifier)) {
+				logCanFrame(f);
+			}
 #endif
       canAnyFrames++;
       canRxBeat++;
