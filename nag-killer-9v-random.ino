@@ -18,7 +18,7 @@ PSRAM: OPI PSRAM
 
 */
 
-// #define ENABLE_OTA 1
+// #define ENABLE_OTA 1     // NOT WORKING, not sure why not, so disabled
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -187,7 +187,7 @@ static void cfgDefaultsModeC(Config& c) {
   c.mode        = MODE_C;
   c.targetId    = 0x370;
   c.torqueCount = 1;
-  c.torqueB2[0] = 0x08; c.torqueB3[0] = 0xB6;
+  c.torqueB2[0] = 0x08; c.torqueB3[0] = 0xB6;   // meaningless, this mode will always apply b2=0x08 and a random walk for b3
   c.hoRatePct   = 100;
 }
 static void clampTorque(uint8_t& b2, uint8_t& b3) {
@@ -307,6 +307,22 @@ static void update_torqueB3(void)
     previousB3 = (uint8_t)value;
 }
 
+// This does a random walk torque value between the minT and maxT, with a random value between +/- MAX_STEP
+// Additional measures taken to make sure it doesn't stay at one limit too long.
+static void update_torqueB3(void)
+{
+  constexpr int minT     = 0x98;    // corresponds to ~1.5nm
+  constexpr int maxT     = 0xB6;    // corresponds to ~1.8nm
+  constexpr int MAX_STEP = 15;
+  previousB3 = constrain(previousB3, minT, maxT);   // just in case previousB3 was corrupted, keep it constrained
+
+  // Establish the valid next-value window, no farther than +/- MAX_STEP
+  // from previousB3 and never outside minT..maxT.
+  int low  = max(minT, previousB3 - MAX_STEP);
+  int high = min(maxT, previousB3 + MAX_STEP);
+
+  previousB3 = random(low, high + 1);
+}
 
 static bool decideInjection(const twai_message_t& src,
                             uint8_t& out_b2, uint8_t& out_b3, bool& out_setHo) {
@@ -563,7 +579,7 @@ static void canTask(void* arg) {
       bool bootDelayPassed = (millis() - canInitTime) >= INJECTION_DELAY_MS;
       bool canSeen = canAnyFrames > 1000;
       
-      if (en && bootDelayPassed && canSeen && !isOurs && ho <= 2) {
+      if (en && bootDelayPassed && canSeen && !isOurs && (realHo == 0 || realHo==2 || realHo==3) ) {
         echoModified(f);
       }
     }
