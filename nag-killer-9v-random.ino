@@ -29,7 +29,7 @@ PSRAM: OPI PSRAM
 #include "driver/twai.h"
 #include "index_html.h"
 
-#ifdef ENABLE_OTA
+#if ENABLE_OTA
 #include <ElegantOTASync.h>            // From Arduino library manager, install "ElegantOTA by Ayush Sharma", v3 or higher, but modified for Sync use
 #endif
 
@@ -800,7 +800,7 @@ static void webTask(void* arg) {
   server.on("/api/update", HTTP_POST, httpUpdate);
   server.on("/api/reset",  HTTP_POST, httpReset);
 
-#ifdef ENABLE_OTA
+#if ENABLE_OTA
   ElegantOTA.onStart([]() {
     Serial.println("OTA update process started.");
   });
@@ -834,7 +834,7 @@ static void webTask(void* arg) {
 
   for (;;) {
     server.handleClient();
-#ifdef ENABLE_OTA
+#if ENABLE_OTA
     ElegantOTA.loop();
 #endif
     webBeat++;  // #4: Heartbeat
