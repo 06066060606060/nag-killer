@@ -18,6 +18,8 @@ PSRAM: OPI PSRAM
 
 */
 
+// #define ENABLE_OTA 1
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -27,7 +29,9 @@ PSRAM: OPI PSRAM
 #include "driver/twai.h"
 #include "index_html.h"
 
+#ifdef ENABLE_OTA
 #include <ElegantOTASync.h>            // From Arduino library manager, install "ElegantOTA by Ayush Sharma", v3 or higher, but modified for Sync use
+#endif
 
 #define CAN_TX_PIN    15			// 5 for SN65HVD230 or ATOMIC CANBus Base, 15 for SIT1050T Waveshare ESP32-S3-RS4850-CAN
 #define CAN_RX_PIN    16			// 6 for SN65HVD230 or ATOMIC CANBus Base, 16 for SIT1050T Waveshare ESP32-S3-RS4850-CAN
@@ -138,8 +142,8 @@ static Preferences prefs;
 
 static void cfgSetCommonDefaults(Config& c) {
   c.enabled        = true;
-  c.burstMs        = 2300;    // was 1000
-  c.pauseMs        = 1500;
+  c.burstMs        = 5000;    // was 1000
+  c.pauseMs        = 200;    // waas 1500
   c.apStateId      = 0x399;
   c.apStateByte    = 0;
   c.apStateShift   = 4;
@@ -168,14 +172,14 @@ static void cfgDefaultsModeB(Config& c) {
   c.mode        = MODE_B;
   c.targetId    = 0x370;
   c.torqueCount = 8;
-  c.torqueB2[0] = 0x08; c.torqueB3[0] = 0xB6;
-  c.torqueB2[1] = 0x08; c.torqueB3[1] = 0xAC;
-  c.torqueB2[2] = 0x08; c.torqueB3[2] = 0xB4;
-  c.torqueB2[3] = 0x08; c.torqueB3[3] = 0xA2;
-  c.torqueB2[4] = 0x08; c.torqueB3[4] = 0xB5;
-  c.torqueB2[5] = 0x08; c.torqueB3[5] = 0xB6;
-  c.torqueB2[6] = 0x08; c.torqueB3[6] = 0xAF;
-  c.torqueB2[7] = 0x08; c.torqueB3[7] = 0xB5;
+  c.torqueB2[0] = 0x08; c.torqueB3[0] = 0x9D;
+  c.torqueB2[1] = 0x08; c.torqueB3[1] = 0xAD;
+  c.torqueB2[2] = 0x08; c.torqueB3[2] = 0xA6;
+  c.torqueB2[3] = 0x08; c.torqueB3[3] = 0xB2;
+  c.torqueB2[4] = 0x08; c.torqueB3[4] = 0xA9;
+  c.torqueB2[5] = 0x08; c.torqueB3[5] = 0xB5;
+  c.torqueB2[6] = 0x08; c.torqueB3[6] = 0xAC;
+  c.torqueB2[7] = 0x08; c.torqueB3[7] = 0xA3;
   c.hoRatePct   = 100;
 }
 static void cfgDefaultsModeC(Config& c) {
@@ -796,6 +800,7 @@ static void webTask(void* arg) {
   server.on("/api/update", HTTP_POST, httpUpdate);
   server.on("/api/reset",  HTTP_POST, httpReset);
 
+#ifdef ENABLE_OTA
   ElegantOTA.onStart([]() {
     Serial.println("OTA update process started.");
   });
@@ -823,13 +828,15 @@ static void webTask(void* arg) {
       server.sendHeader("Location", "/update");
       server.send(302, "text/plain", "");
   });
-
+#endif
 
   server.begin();
 
   for (;;) {
     server.handleClient();
+#ifdef ENABLE_OTA
     ElegantOTA.loop();
+#endif
     webBeat++;  // #4: Heartbeat
     vTaskDelay(1);
   }
