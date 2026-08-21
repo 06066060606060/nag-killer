@@ -142,8 +142,8 @@ static Preferences prefs;
 
 static void cfgSetCommonDefaults(Config& c) {
   c.enabled        = true;
-  c.burstMs        = 5000;    // was 1000
-  c.pauseMs        = 200;    // waas 1500
+  c.burstMs        = 10000;   // was 1000 (1 second), now 10s
+  c.pauseMs        = 0;       // was 1500 (1.5 seconds, for HW4, but causes ocassional elevated warnings on HW3 that can last up to this duration), so 0 sec, no delays
   c.apStateId      = 0x399;
   c.apStateByte    = 0;
   c.apStateShift   = 4;
@@ -372,12 +372,14 @@ static bool decideInjection(const twai_message_t& src,
   }
 
   if (mode == MODE_B) {
-    uint32_t cycleMs = (uint32_t)burstMs + (uint32_t)pauseMs;
-    if (cycleMs == 0) cycleMs = 1;
-    uint32_t phase = (uint32_t)(now - bootTime) % cycleMs;
-    if (phase >= burstMs) return false;
-    
-    if (now - lastChangeMs >= 200) { 
+    if (pauseMs != 0) {
+      uint32_t cycleMs = (uint32_t)burstMs + (uint32_t)pauseMs;
+      if (cycleMs == 0) cycleMs = 1;
+      uint32_t phase = (uint32_t)(now - bootTime) % cycleMs;
+      if (phase >= burstMs) return false;
+    }
+
+    if (now - lastChangeMs >= 200) {    // change injected torque every 200ms.  Car sends torque reading about every 40ms.
       tIdx = (tIdx + 1) % tCount; 
       lastChangeMs = now; 
     }
@@ -388,12 +390,14 @@ static bool decideInjection(const twai_message_t& src,
   }
 
   if (mode == MODE_C) {
-    uint32_t cycleMs = (uint32_t)burstMs + (uint32_t)pauseMs;
-    if (cycleMs == 0) cycleMs = 1;
-    uint32_t phase = (uint32_t)(now - bootTime) % cycleMs;
-    if (phase >= burstMs) return false;
+    if (pauseMs != 0) {
+      uint32_t cycleMs = (uint32_t)burstMs + (uint32_t)pauseMs;
+      if (cycleMs == 0) cycleMs = 1;
+      uint32_t phase = (uint32_t)(now - bootTime) % cycleMs;
+      if (phase >= burstMs) return false;
+    }
     
-    if (now - lastChangeMs >= 200) { 
+    if (now - lastChangeMs >= 200) {     // change injected torque every 200ms.  Car sends torque reading about every 40ms.
       update_torqueB3(); 
       lastChangeMs = now; 
     }
