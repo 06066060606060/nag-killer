@@ -527,7 +527,7 @@ $('modeB').onclick  = () => setMode(1);
 $('modeC').onclick  = () => setMode(2);
 $('modeR').onclick  = async () => {
   if (!cfg) { showToast('not ready'); return; }
-  if (!confirm('Reset all settings to Mode A defaults?')) return;
+  if (!confirm('Reset all settings to Mode C defaults?')) return;
   try {
     const r = await fetch('/api/reset', { method:'POST' });
     if (!r.ok) throw new Error('HTTP ' + r.status);

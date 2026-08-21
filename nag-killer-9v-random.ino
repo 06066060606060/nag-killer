@@ -230,19 +230,19 @@ static void cfgLoad() {
   
   if (err != ESP_OK) {
     Serial.printf("NVS: Init failed %d, using defaults\n", err);
-    cfgDefaultsModeB(cfg);
+    cfgDefaultsModeC(cfg);
     return;
   }
   
   if (!prefs.begin("nag", true)) {
     Serial.println("NVS: No existing config, using defaults");
-    cfgDefaultsModeB(cfg);
+    cfgDefaultsModeC(cfg);
     return;
   }
   
   if (!prefs.isKey("v")) {
     prefs.end();
-    cfgDefaultsModeB(cfg);
+    cfgDefaultsModeC(cfg);
     return;
   }
   
@@ -258,8 +258,8 @@ static void cfgLoad() {
   if (n == 0) { cfg.torqueB3[0] = 0xB6; }
   
   cfg.hoRatePct      = prefs.getUChar("ho", 100);
-  cfg.burstMs        = prefs.getUShort("bms", 2300);
-  cfg.pauseMs        = prefs.getUShort("pms", 1500);
+  cfg.burstMs        = prefs.getUShort("bms", 10000);   // was 1000 (1 second), now 10s
+  cfg.pauseMs        = prefs.getUShort("pms", 0);       // was 1500 (1.5 seconds, for HW4, but causes ocassional elevated warnings on HW3 that can last up to this duration), so 0 sec, no delays
   cfg.apStateId      = prefs.getUShort("apid", 0x399);
   cfg.steeringId     = prefs.getUShort("stid", 0x129);
   prefs.end();
@@ -293,19 +293,19 @@ static void cfgSave() {
 }
 
 // Adding random torque variation between ~1.5-1.8nm (0x0898 - 0x08B6, or 0x98 - 0xB6 for B3)
-static void update_torqueB3(void)
-{
-    uint8_t minT = 0x98;    // corresponds to ~1.5nm (might need to increase)
-    uint8_t maxT = 0xB6;    // corresponds to ~1.8nm
-    uint8_t biaspoint = 0xAE; // biased to about 75% of range, so more high values than low
+// static void update_torqueB3(void)
+// {
+//     uint8_t minT = 0x98;    // corresponds to ~1.5nm (might need to increase)
+//     uint8_t maxT = 0xB6;    // corresponds to ~1.8nm
+//     uint8_t biaspoint = 0xAE; // biased to about 75% of range, so more high values than low
     
-    int offset = (rand() % 41) - 20;   // -20 .. +20, negative spread must be at least the difference between biaspoint and minT.  Statistically speaking, ~29% of the time will be clamped at maxT.
-    int value = (int)biaspoint + offset;
+//     int offset = (rand() % 41) - 20;   // -20 .. +20, negative spread must be at least the difference between biaspoint and minT.  Statistically speaking, ~29% of the time will be clamped at maxT.
+//     int value = (int)biaspoint + offset;
     
-    if (value < minT) value = minT;
-    else if (value > maxT) value = maxT;
-    previousB3 = (uint8_t)value;
-}
+//     if (value < minT) value = minT;
+//     else if (value > maxT) value = maxT;
+//     previousB3 = (uint8_t)value;
+// }
 
 // This does a random walk torque value between the minT and maxT, with a random value between +/- MAX_STEP
 // Additional measures taken to make sure it doesn't stay at one limit too long.
@@ -778,7 +778,7 @@ static void httpUpdate() {
 
 static void httpReset() {
   Config nc; 
-  cfgDefaultsModeB(nc);
+  cfgDefaultsModeC(nc);
   portENTER_CRITICAL(&cfgMux); 
   cfg = nc; 
   portEXIT_CRITICAL(&cfgMux);
