@@ -569,7 +569,7 @@ static void canTask(void* arg) {
       bool bootDelayPassed = (millis() - canInitTime) >= INJECTION_DELAY_MS;
       bool canSeen = canAnyFrames > 1000;
       
-      if (en && bootDelayPassed && canSeen && !isOurs && (realHo == 0 || realHo==2 || realHo==3) ) {
+      if (en && bootDelayPassed && canSeen && !isOurs && realHo == 0) {
         echoModified(f);
       }
     }
