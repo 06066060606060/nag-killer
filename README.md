@@ -119,17 +119,17 @@ Do not assume a successful compile means the system is safe.
 
 
 ## Variant
--Nag-killer by we9v9v HW3 FSD mode C 
--https://github.com/we9v9v/nag-killer-9v-random/tree/main 
+- Nag-killer by we9v9v HW3 FSD mode C 
+https://github.com/we9v9v/nag-killer-9v-random/tree/main 
 
 - Nag-killer with serial can logging 
--https://github.com/06066060606060/nag-killer/tree/can-log-serial 
+https://github.com/06066060606060/nag-killer/tree/can-log-serial 
 
--Nag-killer & EU-Summon-Unlock V2.3 unified for LilyGO/T-2Can 
--https://github.com/06066060606060/T2CAN-Nag-killer-EU-unlock 
+- Nag-killer & EU-Summon-Unlock V2.3 unified for LilyGO/T-2Can 
+https://github.com/06066060606060/T2CAN-Nag-killer-EU-unlock 
 
 - PlatformIO Project 
-- ttps://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review 
+ttps://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review 
 
 ## Credits
 
