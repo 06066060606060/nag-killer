@@ -119,6 +119,9 @@ Do not assume a successful compile means the system is safe.
 
 
 ## Variant
+-Nag-killer by we9v9v HW3 FSD mode C
+https://github.com/we9v9v/nag-killer-9v-random/tree/main
+
 - Nag-killer with serial can logging
 https://github.com/06066060606060/nag-killer/tree/can-log-serial
 
