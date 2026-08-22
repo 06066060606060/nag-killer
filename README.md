@@ -128,8 +128,8 @@ https://github.com/06066060606060/nag-killer/tree/can-log-serial
 - Nag-killer & EU-Summon-Unlock V2.3 unified for LilyGO/T-2Can 
 https://github.com/06066060606060/T2CAN-Nag-killer-EU-unlock 
 
-- PlatformIO Project 
-ttps://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review 
+- PlatformIO Project by Hboop 
+https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review 
 
 ## Credits
 
