@@ -111,7 +111,11 @@ static unsigned long lastStatusLog = 0;
 static unsigned long lastNoCanWarn = 0;  // #2: For log throttling
 static unsigned long lastTxFailLog = 0;  // Throttle TX fail logs
 
-static uint8_t previousB3 = 0xA7;        // midpoint B3 for torque values between 0x98 and 0xB6 (1.48nm - 1.78nm)
+// Randomwalk Mode C
+static constexpr int MODE_C_MIN_T     = 0x98;   // corresponds to ~1.5Nm
+static constexpr int MODE_C_MAX_T     = 0xB6;   // corresponds to ~1.8Nm
+static constexpr int MODE_C_MAX_STEP  = 15;     // no more than 0.15Nm change from the previous value
+static uint8_t previousB3 = (MODE_C_MIN_T + MODE_C_MAX_T) / 2;        // midpoint B3 for torque values between 0x98 and 0xB6 (1.48nm - 1.78nm)
 
 // ── Heartbeat counters (#4) ─────────────────────────────────────
 static volatile uint32_t canBeat = 0;
@@ -292,34 +296,16 @@ static void cfgSave() {
 
 }
 
-// Adding random torque variation between ~1.5-1.8nm (0x0898 - 0x08B6, or 0x98 - 0xB6 for B3)
-// static void update_torqueB3(void)
-// {
-//     uint8_t minT = 0x98;    // corresponds to ~1.5nm (might need to increase)
-//     uint8_t maxT = 0xB6;    // corresponds to ~1.8nm
-//     uint8_t biaspoint = 0xAE; // biased to about 75% of range, so more high values than low
-    
-//     int offset = (rand() % 41) - 20;   // -20 .. +20, negative spread must be at least the difference between biaspoint and minT.  Statistically speaking, ~29% of the time will be clamped at maxT.
-//     int value = (int)biaspoint + offset;
-    
-//     if (value < minT) value = minT;
-//     else if (value > maxT) value = maxT;
-//     previousB3 = (uint8_t)value;
-// }
-
-// This does a random walk torque value between the minT and maxT, with a random value between +/- MAX_STEP
-// Additional measures taken to make sure it doesn't stay at one limit too long.
+// This does a random walk torque value between the MODE_C_MIN_T and MODE_C_MAX_T, with a random step value between +/- MODE_C_MAX_STEP
+// Additional measures taken to make sure it doesn't stay at one limit too long. 
 static void update_torqueB3(void)
 {
-  constexpr int minT     = 0x98;    // corresponds to ~1.5nm
-  constexpr int maxT     = 0xB6;    // corresponds to ~1.8nm
-  constexpr int MAX_STEP = 15;
-  previousB3 = constrain(previousB3, minT, maxT);   // just in case previousB3 was corrupted, keep it constrained
+  previousB3 = constrain(previousB3, MODE_C_MIN_T, MODE_C_MAX_T);   // just in case previousB3 was corrupted, keep it constrained
 
-  // Establish the valid next-value window, no farther than +/- MAX_STEP
-  // from previousB3 and never outside minT..maxT.
-  int low  = max(minT, previousB3 - MAX_STEP);
-  int high = min(maxT, previousB3 + MAX_STEP);
+  // Establish the valid next-value window, no farther than +/- MODE_C_MAX_STEP
+  // from previousB3 and never outside MODE_C_MIN_T..MODE_C_MAX_T.
+  int low  = max(MODE_C_MIN_T, previousB3 - MODE_C_MAX_STEP);
+  int high = min(MODE_C_MAX_T, previousB3 + MODE_C_MAX_STEP);
 
   previousB3 = random(low, high + 1);
 }
@@ -333,7 +319,7 @@ static bool decideInjection(const twai_message_t& src,
   uint8_t  mode, tCount, hoPct;
   uint16_t burstMs, pauseMs;
   uint8_t  tB2[MAX_TORQUE_ENTRIES], tB3[MAX_TORQUE_ENTRIES];
-  
+   
   portENTER_CRITICAL(&cfgMux);
   mode    = cfg.mode;
   tCount  = cfg.torqueCount;
