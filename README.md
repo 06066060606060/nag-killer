@@ -139,8 +139,9 @@ https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review
 - ## Discord server: 
 https://discord.gg/euPbYG8Npc
 
-> **Support the project:**  
-> [![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/mickymurcid) 
+> **Support the project:**
+
+<a href="https://www.buymeacoffee.com/xbmod" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
 Bitcoin: bc1pl9nuyhqd78gjc2wdcqr39de7qwtff732ngr28vy8r2sxfa7a6uzsrhe387  
 Lightning: ₿cakegrip53@phoenixwallet.me
