@@ -122,7 +122,7 @@ Do not assume a successful compile means the system is safe.
 - Nag-killer by we9v9v HW3 FSD mode C 
 https://github.com/we9v9v/nag-killer-9v-random/tree/main 
 
-- Nag-killer & EU-Summon-Unlock V2.3 unified for LilyGO/T-2Can 
+- Nag-killer & EU-Summon-Unlock unified for LilyGO/T-2Can 
 https://github.com/06066060606060/T2CAN-Nag-killer-EU-unlock 
 
 - PlatformIO Project by Hboop 
