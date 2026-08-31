@@ -52,12 +52,6 @@ observed in sniff logs — the rest periods are now believed to be the
 real reason TSL6P avoids detection on stricter firmware (per @JNP's
 re-analysis of the log).
 
-> **Why bursty, not probabilistic?** v2's first cut applied
-> `handsOn=1` on a fixed ~28 % of frames at random. Re-examination of
-> the TSL6P log shows it's actually `~1 s on, ~1.4–2.0 s off` — the
-> DAS-side detector is satisfied by the *rest period*, not by the
-> per-frame probability. v2 now reproduces the time pattern.
-
 ### C — Random Walk Variation
 Add random walk variation in the injected torque values in order to evade any telemetry detection.
 Always applies positive torque values (human like).
