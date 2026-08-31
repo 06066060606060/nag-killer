@@ -1,17 +1,8 @@
-# Nag-killer V3.1 ESP32-S3
+# Nag-killer ESP32-S3
 
 > ⚠️ Research / educational firmware only.
 >
 > This project interacts with a Tesla vehicle CAN bus. It is intended for controlled bench testing, code review, and research environments only.It sends signals directly to the controller, not a physical command to the steering wheel. Do not use this on public roads or in any situation where unsafe behavior could put people or property at risk. You are responsible for your own testing, wiring, configuration, and local laws.
----
-
-## What Update 3.1 Changes 
-
-- New mode C (Random walk variation) by @wewe9v9v 
-- OTA Update 
-- New dashboard design 
-- TWAI auto recovery 
-
 ---
 
 ## Hardware Target
@@ -25,7 +16,7 @@ This fork was adapted for:
 | Waveshare ESP32-S3-RS485-CAN | SIT1050T                        | GPIO 16 / GPIO 15 | 500 kbps CAN | USB-C or 7-36V supply     |
 
 
-### Pin Definitions
+### CAN Pin Definitions
 
 ```cpp
 #define CAN_RX_PIN 4
@@ -52,11 +43,25 @@ observed in sniff logs — the rest periods are now believed to be the
 real reason TSL6P avoids detection on stricter firmware (per @JNP's
 re-analysis of the log).
 
-### C — Random Walk Variation
-Add random walk variation in the injected torque values in order to evade any telemetry detection.
-Always applies positive torque values (human like).
-not inject if there is real hands on.
- 
+> **Why bursty, not probabilistic?** v2's first cut applied
+> `handsOn=1` on a fixed ~28 % of frames at random. Re-examination of
+> the TSL6P log shows it's actually `~1 s on, ~1.4–2.0 s off` — the
+> DAS-side detector is satisfied by the *rest period*, not by the
+> per-frame probability. v2 now reproduces the time pattern.
+
+### C - Random walk burst/pause
+CAN `0x370`, `handsOn=1` on every injected frame, with a positive torque
+random walk from `+1.50 Nm` to `+1.80 Nm`. Every 200 ms, the next torque is
+chosen randomly within `±0.15 Nm` of the previous value and constrained to
+that range. This avoids abrupt torque jumps while continually varying the
+injected value.
+
+Mode C uses the same configurable burst and pause timing as Mode B. Its
+defaults are a `10000 ms` burst and `0 ms` pause, so it injects continuously
+until those values are changed. The dashboard torque table is ignored: Mode C
+always writes torque byte 2 as `0x08` and generates byte 3 from the random
+walk.
+
 ## Common endpoints
 
 | Endpoint      | Method   | Purpose               |
@@ -133,7 +138,6 @@ https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review
 
 - Original project: `@nicolozak` https://gitlab.com/nicolozak/nag-killer
 - `Ev Open Can Mod` https://github.com/ev-open-can-tools/ev-open-can-tools
-- Updated by X₿mod & Hboop.
 - ESP32 TWAI driver by Espressif Systems
 - Automotive CAN research community
 
@@ -149,9 +153,4 @@ Lightning: ₿cakegrip53@phoenixwallet.me
 
 
   ---
-<img width="270" height="492" alt="Screenshot_2026-08-31-17-39-22-292_com microsoft emmx" src="https://github.com/user-attachments/assets/ecfb2f57-b0d4-4f1d-a895-c3813528b516" />
-
-
-
-
-
+<img width="270" height="720" alt="nag" src="https://github.com/user-attachments/assets/1bf8f227-1540-4e55-8539-b36169f78e44" />

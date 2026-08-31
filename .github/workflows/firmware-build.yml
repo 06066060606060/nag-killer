@@ -1,0 +1,52 @@
+name: Firmware Build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Compile ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default firmware
+            target: build-default
+          - name: Atom-S3 firmware
+            target: build-atom-s3
+          - name: Waveshare firmware
+            target: build-waveshare
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Cache Arduino packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.arduino15
+          key: arduino-cli-${{ runner.os }}-esp32-3.3.11
+
+      - name: Install ESP32 board support
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@3.3.11
+
+      - name: Build firmware
+        run: make ${{ matrix.target }} ARDUINO_CLI=arduino-cli

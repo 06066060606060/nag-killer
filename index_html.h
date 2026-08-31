@@ -150,7 +150,7 @@ const char INDEX_HTML[] PROGMEM = R"HTML(
       <div class="body">
         <div class="r"><span class="rk">CAN recovery</span><span class="rv">TWAI automatic recovery</span></div>
         <div class="r"><span class="rk">CAN state</span><span class="rv" id="sysCanState">—</span></div>
-        <div class="r"><span class="rk">Firmware</span><span class="rv">Nag Killer v3.1</span></div>
+        <div class="r"><span class="rk">Firmware</span><span class="rv">Nag Killer %FIRMWARE_VERSION%</span></div>
         <div class="controlgrid">
           <a class="btn linkbtn" href="/api/config" target="_blank">Config JSON</a>
           <a class="btn linkbtn" href="/api/stats" target="_blank">Stats JSON</a>
@@ -159,7 +159,7 @@ const char INDEX_HTML[] PROGMEM = R"HTML(
     </details>
   </section>
 
-  <div class="bottom">NAG KILLER · TWAI · OTA</div>
+  <div class="bottom">NAG KILLER · %FIRMWARE_VERSION% · TWAI · OTA</div>
 </div>
 <div class="toast" id="toast"></div>
 <script>
