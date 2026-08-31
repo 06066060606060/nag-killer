@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -9,9 +8,14 @@
 #include "driver/twai.h"
 #include "index_html.h"
 
+#define FIRMWARE_VERSION "v3.2.0"
+
+#ifndef CAN_TX_PIN
 #define CAN_TX_PIN    5
-#define CAN_RX_PIN    6
-#define FW_VERSION "NAG-KILLER-v3.1"
+#endif
+#ifndef CAN_RX_PIN
+#define CAN_RX_PIN    4
+#endif
 
 // ── Safety hard caps (NOT user-overridable) ─────────────────────
 static const uint16_t TORQUE_RAW_MAX = 0x8B6;
@@ -108,7 +112,6 @@ static unsigned long lastCanLogMs = 0;
 static unsigned long lastStatusLog = 0;
 static unsigned long lastNoCanWarn = 0;  // #2: For log throttling
 static unsigned long lastTxFailLog = 0;  // Throttle TX fail logs
-
 
 // ── RTC boot count (#5) ─────────────────────────────────────────
 RTC_DATA_ATTR uint32_t rtcBootCount = 0;
@@ -704,7 +707,8 @@ static String statsToJson() {
   s.reserve(512);
   
   s = "{";
-  s += "\"rx\":";            s += String(rxFrames);
+  s += "\"version\":\"";     s += FIRMWARE_VERSION; s += "\"";
+  s += ",\"rx\":";           s += String(rxFrames);
   s += ",\"echo\":";         s += String(echoCount);
   s += ",\"txOk\":";         s += String(txOk);
   s += ",\"txFail\":";       s += String(txFail);
@@ -804,7 +808,21 @@ static void httpOtaFinish() {
   }
 }
 
-static void httpRoot()   { server.send_P(200, "text/html", INDEX_HTML); }
+static void httpRoot() {
+  static const char placeholder[] = "%FIRMWARE_VERSION%";
+  const char* chunkStart = INDEX_HTML;
+  const char* marker;
+
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+
+  while ((marker = strstr_P(chunkStart, placeholder)) != nullptr) {
+    server.sendContent_P(chunkStart, marker - chunkStart);
+    server.sendContent(FIRMWARE_VERSION);
+    chunkStart = marker + strlen(placeholder);
+  }
+  server.sendContent_P(chunkStart);
+}
 static void httpConfig() { server.send(200, "application/json", cfgToJson()); }
 static void httpStats()  { server.send(200, "application/json", statsToJson()); }
 
@@ -959,6 +977,7 @@ void setup() {
   Serial.printf("\n=== BOOT START ===\n");
   Serial.printf("Reset reason: %d (%s)\n", reset_reason, resetReasonName(reset_reason));
   Serial.printf("RTC boot count: %lu\n", (unsigned long)rtcBootCount);
+  Serial.printf("Firmware version: %s\n", FIRMWARE_VERSION);
   if (reset_reason == ESP_RST_BROWNOUT) {
     Serial.println("WARNING: Brownout detected!");
   }
@@ -1020,7 +1039,6 @@ void setup() {
   
   Serial.println("BOOT OK");
 }
-
 
 void loop() {
   vTaskDelay(pdMS_TO_TICKS(1000));
