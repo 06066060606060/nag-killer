@@ -1,14 +1,16 @@
-# Nag-killer ESP32-S3
+# Nag-killer V3.1 ESP32-S3
 
 > ⚠️ Research / educational firmware only.
 >
 > This project interacts with a Tesla vehicle CAN bus. It is intended for controlled bench testing, code review, and research environments only.It sends signals directly to the controller, not a physical command to the steering wheel. Do not use this on public roads or in any situation where unsafe behavior could put people or property at risk. You are responsible for your own testing, wiring, configuration, and local laws.
 ---
 
-## What This Update Changes
+## What Update 3.1 Changes 
 
-- New dashboard design
-- Removed Mode C
+- New mode C (Random walk variation) by @wewe9v9v 
+- OTA Update 
+- New dashboard design 
+- TWAI auto recovery 
 
 ---
 
@@ -55,6 +57,11 @@ re-analysis of the log).
 > the TSL6P log shows it's actually `~1 s on, ~1.4–2.0 s off` — the
 > DAS-side detector is satisfied by the *rest period*, not by the
 > per-frame probability. v2 now reproduces the time pattern.
+
+### C — Random Walk Variation
+Add random walk variation in the injected torque values in order to evade any telemetry detection.
+Always applies positive torque values (human like).
+not inject if there is real hands on.
  
 ## Common endpoints
 
@@ -148,7 +155,8 @@ Lightning: ₿cakegrip53@phoenixwallet.me
 
 
   ---
-<img width="270" height="720" alt="nag" src="https://github.com/user-attachments/assets/1bf8f227-1540-4e55-8539-b36169f78e44" />
+<img width="270" height="492" alt="Screenshot_2026-08-31-17-39-22-292_com microsoft emmx" src="https://github.com/user-attachments/assets/ecfb2f57-b0d4-4f1d-a895-c3813528b516" />
+
 
 
 
