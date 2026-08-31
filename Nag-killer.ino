@@ -1,15 +1,3 @@
-/*
-    ================================================================
-    nag_echo v3 — runtime-configurable CAN counter-echo
-                   with on-board WiFi dashboard
-    ================================================================
-
-    Educational / research firmware. NOT for use on public roads.
-    Hard safety cap: torque is clamped to ±1.80 Nm in firmware,
-    cannot be overridden from the dashboard.
-
-
-*/
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -17,11 +5,13 @@
 #include <Preferences.h>
 #include <nvs_flash.h>
 #include <esp_system.h>
+#include <Update.h>
 #include "driver/twai.h"
 #include "index_html.h"
 
 #define CAN_TX_PIN    5
 #define CAN_RX_PIN    6
+#define FW_VERSION "NAG-KILLER-v3.1"
 
 // ── Safety hard caps (NOT user-overridable) ─────────────────────
 static const uint16_t TORQUE_RAW_MAX = 0x8B6;
@@ -34,8 +24,14 @@ static const uint8_t  MAX_TORQUE_ENTRIES = 8;
 static const unsigned long DRIVER_WAKE_DELAY_MS = 10000;  // #1: Before CAN init
 static const unsigned long INJECTION_DELAY_MS = 15000;    // After CAN init
 
+// ── Mode C random-walk ────────────────────────────────────────────
+static constexpr int MODE_C_MIN_T = 0x98;
+static constexpr int MODE_C_MAX_T = 0xB6;
+static constexpr int MODE_C_MAX_STEP = 15;
+static uint8_t previousB3 = (MODE_C_MIN_T + MODE_C_MAX_T) / 2;
+
 // ── Modes ───────────────────────────────────────────────────────
-enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_CUSTOM = 2 };
+enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_C = 2 };
 
 // ── Runtime config (persisted to NVS) ───────────────────────────
 struct Config {
@@ -91,6 +87,21 @@ static unsigned long bootTime = 0;
 static unsigned long canInitTime = 0;  // When TWAI actually started
 static volatile bool twaiReady = false;  // True only after TWAI starts cleanly
 
+// ── TWAI recovery / OTA state ───────────────────────────────────
+static volatile bool twaiRecovering = false;
+static volatile uint32_t twaiRecoveryCount = 0;
+static volatile uint32_t twaiRecoveryFailCount = 0;
+static unsigned long twaiRecoveryStartMs = 0;
+static unsigned long lastTwaiStatusMs = 0;
+static const unsigned long TWAI_RECOVERY_TIMEOUT_MS = 1800;
+
+static volatile bool otaInProgress = false;
+static volatile bool otaSuccess = false;
+static volatile bool otaError = false;
+static volatile uint32_t otaBytes = 0;
+static volatile uint32_t otaTotal = 0;
+static char otaErrMsg[64] = "";
+
 static volatile uint32_t canAnyFrames = 0;
 static volatile unsigned long lastCanFrameMs = 0;  // Last time any CAN frame was received
 static unsigned long lastCanLogMs = 0;
@@ -98,10 +109,6 @@ static unsigned long lastStatusLog = 0;
 static unsigned long lastNoCanWarn = 0;  // #2: For log throttling
 static unsigned long lastTxFailLog = 0;  // Throttle TX fail logs
 
-// ── Heartbeat counters (#4) ─────────────────────────────────────
-static volatile uint32_t canBeat = 0;
-static volatile uint32_t canRxBeat = 0;
-static volatile uint32_t webBeat = 0;
 
 // ── RTC boot count (#5) ─────────────────────────────────────────
 RTC_DATA_ATTR uint32_t rtcBootCount = 0;
@@ -162,6 +169,23 @@ static void cfgDefaultsModeB(Config& c) {
   c.torqueB2[2] = 0x07; c.torqueB3[2] = 0x6C;
   c.torqueB2[3] = 0x07; c.torqueB3[3] = 0x4E;
   c.hoRatePct   = 100;
+}
+
+static void cfgDefaultsModeC(Config& c) {
+  cfgSetCommonDefaults(c);
+  c.mode        = MODE_C;
+  c.targetId    = 0x370;
+  c.torqueCount = 1;
+  c.torqueB2[0] = 0x08;
+  c.torqueB3[0] = 0xB6; // placeholder; Mode C generates B3 dynamically
+  c.hoRatePct   = 100;
+}
+
+static void update_torqueB3() {
+  previousB3 = constrain(previousB3, MODE_C_MIN_T, MODE_C_MAX_T);
+  int low  = max(MODE_C_MIN_T, previousB3 - MODE_C_MAX_STEP);
+  int high = min(MODE_C_MAX_T, previousB3 + MODE_C_MAX_STEP);
+  previousB3 = random(low, high + 1);
 }
 
 static void clampTorque(uint8_t& b2, uint8_t& b3) {
@@ -303,7 +327,7 @@ static bool decideInjection(const twai_message_t& src,
     prevMode = mode;
   }
 
-  if (mode == MODE_A || mode == MODE_CUSTOM) {
+  if (mode == MODE_A) {
     out_b2 = tB2[tIdx % tCount];
     out_b3 = tB3[tIdx % tCount];
     tIdx++;
@@ -325,6 +349,25 @@ static bool decideInjection(const twai_message_t& src,
     }
     out_b2 = tB2[tIdx];
     out_b3 = tB3[tIdx];
+    out_setHo = true;
+    return true;
+  }
+
+  if (mode == MODE_C) {
+    if (pauseMs != 0) {
+      uint32_t cycleMs = (uint32_t)burstMs + (uint32_t)pauseMs;
+      if (cycleMs == 0) cycleMs = 1;
+      uint32_t phase = (uint32_t)(now - bootTime) % cycleMs;
+      if (phase >= burstMs) return false;
+    }
+
+    if (now - lastChangeMs >= 200) {
+      update_torqueB3();
+      lastChangeMs = now;
+    }
+
+    out_b2 = 0x08;
+    out_b3 = previousB3;
     out_setHo = true;
     return true;
   }
@@ -435,8 +478,6 @@ static void canTask(void* arg) {
   for (;;) {
     twai_message_t f;
     
-    // #4: Heartbeat counter
-    canBeat++;
     
     // #2: Changed from reboot to log only every 5 seconds
     if ((millis() - bootTime) > 20000 && canAnyFrames == 0) {
@@ -448,7 +489,6 @@ static void canTask(void* arg) {
     
     while (twai_receive(&f, pdMS_TO_TICKS(2)) == ESP_OK) {
       canAnyFrames++;
-      canRxBeat++;
       lastCanFrameMs = millis();
 
       unsigned long now = millis();
@@ -461,16 +501,20 @@ static void canTask(void* arg) {
       }
 
       uint16_t targetId, apStateId, steeringId;
+      uint8_t mode;
       bool en;
       portENTER_CRITICAL(&cfgMux);
       targetId   = cfg.targetId;
       apStateId  = cfg.apStateId;
       steeringId = cfg.steeringId;
+      mode       = cfg.mode;
       en         = cfg.enabled;
       portEXIT_CRITICAL(&cfgMux);
 
       if (f.identifier == apStateId)  updateApState(f);
-      if (f.identifier == steeringId) updateSteering(f);
+      // Steering feedback is kept intact for Modes A/B, but is not needed
+      // by Mode C and is therefore deliberately skipped in that mode.
+      if (mode != MODE_C && f.identifier == steeringId) updateSteering(f);
 
       if (f.identifier != targetId) continue;
       rxFrames++;
@@ -485,11 +529,17 @@ static void canTask(void* arg) {
       bool isOurs = false;
       if (ho == 1) {
         portENTER_CRITICAL(&cfgMux);
-        for (uint8_t i = 0; i < cfg.torqueCount; i++) {
-          uint16_t cfgRaw = ((cfg.torqueB2[i] & 0x0F) << 8) | cfg.torqueB3[i];
-          if (tRaw == cfgRaw) { 
-            isOurs = true; 
-            break; 
+        uint8_t modeNow = cfg.mode;
+        if (modeNow == MODE_C) {
+          uint16_t cfgRaw = (0x08u << 8) | previousB3;
+          if (tRaw == cfgRaw) isOurs = true;
+        } else {
+          for (uint8_t i = 0; i < cfg.torqueCount; i++) {
+            uint16_t cfgRaw = ((cfg.torqueB2[i] & 0x0F) << 8) | cfg.torqueB3[i];
+            if (tRaw == cfgRaw) {
+              isOurs = true;
+              break;
+            }
           }
         }
         portEXIT_CRITICAL(&cfgMux);
@@ -504,20 +554,104 @@ static void canTask(void* arg) {
       }
     }
 
-    twai_status_info_t st;
-    if (twai_get_status_info(&st) == ESP_OK) {
-      unsigned long nowStatus = millis();
-      if (nowStatus - lastStatusLog >= 5000) {
-        Serial.printf("[TWAI] state=%d tx_err=%u rx_err=%u missed=%u txOk=%u\n",
-          st.state, st.tx_error_counter, st.rx_error_counter, 
-          st.rx_missed_count, (unsigned)txOk);
-        lastStatusLog = nowStatus;
-      }
+    // ── TWAI status / recovery ──────────────────────────────────
+    // Native TWAI BUS_OFF recovery, followed by an explicit restart.
+    // If the controller does not settle, reinstall the TWAI driver.
+    unsigned long nowStatus = millis();
+    if (nowStatus - lastTwaiStatusMs >= 250) {
+      lastTwaiStatusMs = nowStatus;
+      twai_status_info_t st = {};
+      if (twai_get_status_info(&st) == ESP_OK) {
+        if (st.state == TWAI_STATE_RUNNING) {
+          twaiReady = true;
+          twaiRecovering = false;
+        } else if (st.state == TWAI_STATE_BUS_OFF) {
+          if (!twaiRecovering) {
+            twaiRecovering = true;
+            twaiRecoveryStartMs = nowStatus;
+            twaiRecoveryCount++;
+            twaiReady = false;
+            Serial.printf("[TWAI] BUS_OFF -> recovery #%lu\n",
+                          (unsigned long)twaiRecoveryCount);
+            esp_err_t e = twai_initiate_recovery();
+            if (e != ESP_OK) {
+              twaiRecoveryFailCount++;
+              Serial.printf("[TWAI] initiate_recovery failed: %s\n",
+                            esp_err_to_name(e));
+            }
+          }
+        } else if (st.state == TWAI_STATE_STOPPED && twaiRecovering) {
+          esp_err_t e = twai_start();
+          if (e == ESP_OK) {
+            twaiReady = true;
+            twaiRecovering = false;
+            canInitTime = millis();
+            Serial.println("[TWAI] recovery complete -> restarted");
+          } else {
+            twaiRecoveryFailCount++;
+            Serial.printf("[TWAI] restart after recovery failed: %s\n",
+                          esp_err_to_name(e));
+          }
+        } else if (st.state == TWAI_STATE_RECOVERING) {
+          twaiReady = false;
+        } else {
+          twaiReady = false;
+        }
 
-      if (st.state == TWAI_STATE_BUS_OFF) {
-        Serial.println("TWAI: Bus off, recovering...");
-        twai_initiate_recovery();
-        vTaskDelay(pdMS_TO_TICKS(300));
+        if (twaiRecovering &&
+            (unsigned long)(nowStatus - twaiRecoveryStartMs) >= TWAI_RECOVERY_TIMEOUT_MS) {
+          Serial.println("[TWAI] recovery timeout -> clean reinstall");
+          twaiReady = false;
+
+          twai_status_info_t cur = {};
+          if (twai_get_status_info(&cur) == ESP_OK) {
+            if (cur.state == TWAI_STATE_RUNNING) {
+              twai_stop();
+            } else if (cur.state == TWAI_STATE_BUS_OFF) {
+              twai_initiate_recovery();
+            }
+          }
+
+          uint32_t waitStart = millis();
+          while ((millis() - waitStart) < TWAI_RECOVERY_TIMEOUT_MS) {
+            twai_status_info_t w = {};
+            if (twai_get_status_info(&w) != ESP_OK || w.state == TWAI_STATE_STOPPED) break;
+            vTaskDelay(pdMS_TO_TICKS(25));
+          }
+
+          esp_err_t u = twai_driver_uninstall();
+          if (u != ESP_OK && u != ESP_ERR_INVALID_STATE) {
+            twaiRecoveryFailCount++;
+            Serial.printf("[TWAI] uninstall failed: %s\n", esp_err_to_name(u));
+          } else {
+            twai_general_config_t rg = TWAI_GENERAL_CONFIG_DEFAULT(
+                (gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN, TWAI_MODE_NORMAL);
+            rg.rx_queue_len = 256;
+            rg.tx_queue_len = 16;
+            twai_timing_config_t rt = TWAI_TIMING_CONFIG_500KBITS();
+            twai_filter_config_t rf = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+
+            esp_err_t ie = twai_driver_install(&rg, &rt, &rf);
+            esp_err_t se = (ie == ESP_OK) ? twai_start() : ie;
+
+            if (ie == ESP_OK && se == ESP_OK) {
+              uint32_t alerts = TWAI_ALERT_TX_IDLE | TWAI_ALERT_TX_SUCCESS |
+                                TWAI_ALERT_TX_FAILED | TWAI_ALERT_ERR_PASS |
+                                TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_DATA |
+                                TWAI_ALERT_RX_QUEUE_FULL;
+              twai_reconfigure_alerts(alerts, NULL);
+              twaiReady = true;
+              twaiRecovering = false;
+              canInitTime = millis();
+              Serial.println("[TWAI] clean reinstall complete");
+            } else {
+              twaiRecoveryFailCount++;
+              Serial.printf("[TWAI] reinstall failed: %s / %s\n",
+                            esp_err_to_name(ie), esp_err_to_name(se));
+              twaiRecovering = false;
+            }
+          }
+        }
       }
     }
 
@@ -588,17 +722,86 @@ static String statsToJson() {
   s += ",\"stStaleMs\":";    s += String((c.lastSteeringMs == 0) ? 999999 : (now - c.lastSteeringMs));
   s += ",\"canAny\":";       s += String(canAnyFrames);
   s += ",\"canAgeMs\":";     s += String((lastCanFrameMs == 0) ? 999999 : (now - lastCanFrameMs));
-  s += ",\"canBeat\":";      s += String(canBeat);
-  s += ",\"canRxBeat\":";    s += String(canRxBeat);
-  s += ",\"webBeat\":";      s += String(webBeat);
   s += ",\"twaiReady\":";    s += (twaiReady ? "true" : "false");
   
   twai_status_info_t st; 
   if (twaiReady && twai_get_status_info(&st) == ESP_OK) {
     s += ",\"canState\":";     s += String((int)st.state);
   }
+  s += ",\"twaiRecovery\":"; s += String(twaiRecoveryCount);
+  s += ",\"twaiRecoveryFail\":"; s += String(twaiRecoveryFailCount);
+  s += ",\"twaiRecovering\":"; s += (twaiRecovering ? "true" : "false");
+  s += ",\"otaInProgress\":"; s += (otaInProgress ? "true" : "false");
+  s += ",\"otaSuccess\":"; s += (otaSuccess ? "true" : "false");
+  s += ",\"otaError\":"; s += (otaError ? "true" : "false");
+  s += ",\"otaErrMsg\":\"" + String(otaErrMsg) + "\"";
+  s += ",\"otaBytes\":"; s += String(otaBytes);
+  s += ",\"otaTotal\":"; s += String(otaTotal);
   s += "}";
   return s;
+}
+
+static void httpOtaUpload() {
+  HTTPUpload &up = server.upload();
+
+  if (up.status == UPLOAD_FILE_START) {
+    otaInProgress = true;
+    otaSuccess = false;
+    otaError = false;
+    otaBytes = 0;
+    otaTotal = 0;
+    otaErrMsg[0] = '\0';
+    Serial.printf("[OTA] Start: %s\n", up.filename.c_str());
+
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      otaError = true;
+      strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
+      otaErrMsg[sizeof(otaErrMsg) - 1] = '\0';
+      Serial.printf("[OTA] begin() failed: %s\n", otaErrMsg);
+    }
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (!otaError) {
+      size_t written = Update.write(up.buf, up.currentSize);
+      if (written != up.currentSize) {
+        otaError = true;
+        strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
+        otaErrMsg[sizeof(otaErrMsg) - 1] = '\0';
+        Serial.printf("[OTA] write() failed: %s\n", otaErrMsg);
+      }
+    }
+    otaBytes += up.currentSize;
+  } else if (up.status == UPLOAD_FILE_END) {
+    otaTotal = up.totalSize;
+    if (!otaError && Update.end(true)) {
+      otaSuccess = true;
+      Serial.printf("[OTA] Success: %u bytes\n", up.totalSize);
+    } else if (!otaError) {
+      otaError = true;
+      strncpy(otaErrMsg, Update.errorString(), sizeof(otaErrMsg) - 1);
+      otaErrMsg[sizeof(otaErrMsg) - 1] = '\0';
+      Serial.printf("[OTA] end() failed: %s\n", otaErrMsg);
+    }
+    otaInProgress = false;
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    Update.end();
+    otaInProgress = false;
+    otaError = true;
+    strncpy(otaErrMsg, "aborted", sizeof(otaErrMsg) - 1);
+    otaErrMsg[sizeof(otaErrMsg) - 1] = '\0';
+    Serial.println("[OTA] Aborted");
+  }
+}
+
+static void httpOtaFinish() {
+  bool ok = otaSuccess && !otaError;
+  String resp = String("{\"ok\":") + (ok ? "true" : "false") +
+                ",\"error\":\"" + String(otaErrMsg) + "\"}";
+  server.sendHeader("Connection", "close");
+  server.send(200, "application/json", resp);
+  if (ok) {
+    delay(700);
+    ESP.restart();
+  }
 }
 
 static void httpRoot()   { server.send_P(200, "text/html", INDEX_HTML); }
@@ -609,7 +812,8 @@ static void httpSetMode() {
   int m = server.arg("m").toInt();
   Config nc;
   if (m == 1) cfgDefaultsModeB(nc);
-  else        cfgDefaultsModeA(nc);
+  else if (m == 2) cfgDefaultsModeC(nc);
+  else cfgDefaultsModeA(nc);
   
   portENTER_CRITICAL(&cfgMux); 
   cfg = nc; 
@@ -734,11 +938,11 @@ static void webTask(void* arg) {
   server.on("/api/mode",   HTTP_POST, httpSetMode);
   server.on("/api/update", HTTP_POST, httpUpdate);
   server.on("/api/reset",  HTTP_POST, httpReset);
+  server.on("/update", HTTP_POST, httpOtaFinish, httpOtaUpload);
   server.begin();
 
   for (;;) {
     server.handleClient();
-    webBeat++;  // #4: Heartbeat
     vTaskDelay(1);
   }
 }
@@ -817,31 +1021,7 @@ void setup() {
   Serial.println("BOOT OK");
 }
 
-// #4: Heartbeat logging in loop()
+
 void loop() {
-  static unsigned long lastBeatLog = 0;
-  static uint32_t loopBeat = 0;
-
-  loopBeat++;
-  unsigned long now = millis();
-
-  if (now - lastBeatLog >= 5000) {
-    lastBeatLog = now;
-    unsigned long canAgeMs = (lastCanFrameMs == 0) ? 999999 : (now - lastCanFrameMs);
-    Serial.printf(
-      "[BEAT] uptime=%lu loop=%lu canBeat=%lu canRxBeat=%lu webBeat=%lu canFrames=%lu canAgeMs=%lu txOk=%lu txFail=%lu heap=%u\n",
-      now / 1000,
-      (unsigned long)loopBeat,
-      (unsigned long)canBeat,
-      (unsigned long)canRxBeat,
-      (unsigned long)webBeat,
-      (unsigned long)canAnyFrames,
-      canAgeMs,
-      (unsigned long)txOk,
-      (unsigned long)txFail,
-      ESP.getFreeHeap()
-    );
-  }
-
   vTaskDelay(pdMS_TO_TICKS(1000));
 }
