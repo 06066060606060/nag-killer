@@ -8,10 +8,11 @@
 #include <Update.h>
 #include "driver/twai.h"
 #include "index_html.h"
+#include "nag_human_pure.h"
 
 #define CAN_TX_PIN    5
 #define CAN_RX_PIN    6
-#define FW_VERSION "NAG-KILLER-v3.1"
+#define FW_VERSION "NAG-KILLER-v3.5a1-SC"
 
 // ── Safety hard caps (NOT user-overridable) ─────────────────────
 static const uint16_t TORQUE_RAW_MAX = 0x8B6;
@@ -30,8 +31,20 @@ static constexpr int MODE_C_MAX_T = 0xB6;
 static constexpr int MODE_C_MAX_STEP = 15;
 static uint8_t previousB3 = (MODE_C_MIN_T + MODE_C_MAX_T) / 2;
 
+// ── Mode H · Human Interaction (only new engine on the v3.1 runtime) ──
+static constexpr uint16_t NAG_SPEED_ID = 0x257;
+static constexpr uint32_t NAG_SPEED_FRESH_MS = 1000;
+static portMUX_TYPE nagHumanMux = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE nagSpeedMux = portMUX_INITIALIZER_UNLOCKED;
+static NagHumanConfigPure nagHumanConfig = nagHumanDefaultConfigPure();
+static NagHumanStatePure nagHumanState = {};
+static bool nagHumanInitialized = false;
+static bool nagSpeedValid = false;
+static uint16_t nagSpeedRaw = 0;
+static uint32_t nagSpeedLastMs = 0;
+
 // ── Modes ───────────────────────────────────────────────────────
-enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_C = 2 };
+enum NagMode : uint8_t { MODE_A = 0, MODE_B = 1, MODE_C = 2, MODE_H = 3 };
 
 // ── Runtime config (persisted to NVS) ───────────────────────────
 struct Config {
@@ -83,6 +96,8 @@ static volatile uint8_t  realHo      = 0;
 static volatile float    realTorque  = 0;
 static volatile uint8_t  lastInjectedHo = 0;
 static volatile float    lastInjectedNm = 0;
+static volatile uint16_t lastInjectedRaw = 0;
+static volatile bool     lastInjectedRawValid = false;
 static unsigned long bootTime = 0;
 static unsigned long canInitTime = 0;  // When TWAI actually started
 static volatile bool twaiReady = false;  // True only after TWAI starts cleanly
@@ -178,6 +193,16 @@ static void cfgDefaultsModeC(Config& c) {
   c.torqueCount = 1;
   c.torqueB2[0] = 0x08;
   c.torqueB3[0] = 0xB6; // placeholder; Mode C generates B3 dynamically
+  c.hoRatePct   = 100;
+}
+
+static void cfgDefaultsModeH(Config& c) {
+  cfgSetCommonDefaults(c);
+  c.mode        = MODE_H;
+  c.targetId    = 0x370;
+  c.torqueCount = 1;
+  c.torqueB2[0] = 0x08;
+  c.torqueB3[0] = 0x02; // 0 Nm placeholder; Mode H generates torque dynamically
   c.hoRatePct   = 100;
 }
 
@@ -290,6 +315,69 @@ static void cfgSave() {
 
 }
 
+static uint32_t nagHumanRuntimeSeed() {
+  uint32_t seed = (uint32_t)esp_random() ^ (uint32_t)micros() ^ 0x484D4F44u;
+  return nagHumanSanitizeSeedPure(seed);
+}
+
+static void nagHumanRuntimeReset(bool reseed) {
+  const uint32_t seed = reseed ? nagHumanRuntimeSeed() : 0u;
+  portENTER_CRITICAL(&nagHumanMux);
+  if (!nagHumanInitialized) {
+    nagHumanInitPure(nagHumanState, reseed ? seed : 0x484D4F44u);
+    nagHumanInitialized = true;
+  } else if (reseed) {
+    nagHumanReseedPure(nagHumanState, seed);
+  } else {
+    nagHumanResetRuntimePure(nagHumanState, H_IDLE);
+  }
+  portEXIT_CRITICAL(&nagHumanMux);
+}
+
+static NagHumanStepResultPure nagHumanRuntimeStep(uint32_t nowMs, uint16_t sourceRaw,
+                                                   bool speedValid, bool speedFresh,
+                                                   uint16_t speedRaw) {
+  NagHumanStepResultPure result = {};
+  portENTER_CRITICAL(&nagHumanMux);
+  if (!nagHumanInitialized) {
+    nagHumanInitPure(nagHumanState, nagHumanRuntimeSeed());
+    nagHumanInitialized = true;
+  }
+  result = nagHumanStepPure(nagHumanState, nagHumanConfig, nowMs, sourceRaw,
+                            true, speedValid, speedFresh, speedRaw);
+  portEXIT_CRITICAL(&nagHumanMux);
+  return result;
+}
+
+static NagHumanStatePure nagHumanRuntimeSnapshot() {
+  NagHumanStatePure snapshot = {};
+  portENTER_CRITICAL(&nagHumanMux);
+  snapshot = nagHumanState;
+  portEXIT_CRITICAL(&nagHumanMux);
+  return snapshot;
+}
+
+// Tesla Party CAN 0x257 DI_vehicleSpeed: Intel bit 12, length 12,
+// factor 0.08 km/h, offset -40 km/h. Raw 4095 is SNA.
+static bool nagDecodePartySpeedRaw(const twai_message_t& f, uint16_t& rawOut) {
+  if (f.data_length_code < 3) return false;
+  const uint16_t raw = (uint16_t)(((uint16_t)(f.data[1] >> 4) & 0x0Fu) |
+                                  ((uint16_t)f.data[2] << 4));
+  if (raw == 0x0FFFu) return false;
+  rawOut = raw;
+  return true;
+}
+
+static void nagUpdateSpeed(const twai_message_t& f) {
+  uint16_t raw = 0;
+  const bool ok = nagDecodePartySpeedRaw(f, raw);
+  portENTER_CRITICAL(&nagSpeedMux);
+  nagSpeedValid = ok;
+  if (ok) nagSpeedRaw = raw;
+  nagSpeedLastMs = millis();
+  portEXIT_CRITICAL(&nagSpeedMux);
+}
+
 static bool decideInjection(const twai_message_t& src,
                             uint8_t& out_b2, uint8_t& out_b3, bool& out_setHo) {
   if (src.data_length_code < 8) return false;
@@ -321,10 +409,14 @@ static bool decideInjection(const twai_message_t& src,
   // The old global tracker was updated during cfgSave(), so live mode
   // switches could be saved before this function ever saw the change.
   if (mode != prevMode) {
+    const uint8_t oldMode = prevMode;
     tIdx = 0;
     hoSeq = 0;
     lastChangeMs = now;
     prevMode = mode;
+    lastInjectedRawValid = false;
+    if (mode == MODE_H) nagHumanRuntimeReset(true);
+    else if (oldMode == MODE_H) nagHumanRuntimeReset(false);
   }
 
   if (mode == MODE_A) {
@@ -372,6 +464,27 @@ static bool decideInjection(const twai_message_t& src,
     return true;
   }
 
+  if (mode == MODE_H) {
+    bool speedValid;
+    uint16_t speedRaw;
+    uint32_t speedLastMs;
+    portENTER_CRITICAL(&nagSpeedMux);
+    speedValid = nagSpeedValid;
+    speedRaw = nagSpeedRaw;
+    speedLastMs = nagSpeedLastMs;
+    portEXIT_CRITICAL(&nagSpeedMux);
+    const bool speedFresh = speedValid && speedLastMs &&
+        (uint32_t)(now - speedLastMs) <= NAG_SPEED_FRESH_MS;
+    const uint16_t sourceRaw = ((uint16_t)(src.data[2] & 0x0F) << 8) | src.data[3];
+    const NagHumanStepResultPure h = nagHumanRuntimeStep(
+        now, sourceRaw, speedValid, speedFresh, speedRaw);
+    if (!h.tx) return false;
+    out_b2 = (uint8_t)((h.raw >> 8) & 0x0F);
+    out_b3 = (uint8_t)(h.raw & 0xFF);
+    out_setHo = h.setHo;
+    return true;
+  }
+
   return false;
 }
 
@@ -408,6 +521,8 @@ static void echoModified(const twai_message_t& src) {
     echoCount++;
     lastInjectedHo = setHo ? 1 : 0;
     uint16_t raw = ((b2 & 0x0F) << 8) | b3;
+    lastInjectedRaw = raw;
+    lastInjectedRawValid = true;
     lastInjectedNm = raw * 0.01f - 20.5f;
     
     // Serial.printf("[TX] id=0x%03X data=%02X%02X%02X%02X%02X%02X%02X%02X t=%.2fNm\n",
@@ -512,7 +627,8 @@ static void canTask(void* arg) {
       portEXIT_CRITICAL(&cfgMux);
 
       if (f.identifier == apStateId)  updateApState(f);
-      // Steering feedback is kept intact for Modes A/B, but is not needed
+      if (f.identifier == NAG_SPEED_ID) nagUpdateSpeed(f);
+      // Steering feedback is kept intact for Modes A/B/H, but is not needed
       // by Mode C and is therefore deliberately skipped in that mode.
       if (mode != MODE_C && f.identifier == steeringId) updateSteering(f);
 
@@ -533,6 +649,8 @@ static void canTask(void* arg) {
         if (modeNow == MODE_C) {
           uint16_t cfgRaw = (0x08u << 8) | previousB3;
           if (tRaw == cfgRaw) isOurs = true;
+        } else if (modeNow == MODE_H) {
+          if (lastInjectedRawValid && tRaw == lastInjectedRaw) isOurs = true;
         } else {
           for (uint8_t i = 0; i < cfg.torqueCount; i++) {
             uint16_t cfgRaw = ((cfg.torqueB2[i] & 0x0F) << 8) | cfg.torqueB3[i];
@@ -680,6 +798,8 @@ static String cfgToJson() {
   s += ",\"pauseMs\":";   s += String(c.pauseMs);
   s += ",\"apStateId\":"; s += String(c.apStateId);
   s += ",\"steeringId\":";s += String(c.steeringId);
+  s += ",\"humanPeakMinNm\":1.50";
+  s += ",\"humanPeakMaxNm\":2.00";
   s += ",\"torque\":[";
   for (uint8_t i = 0; i < c.torqueCount; i++) {
     if (i) s += ",";
@@ -731,6 +851,18 @@ static String statsToJson() {
   s += ",\"twaiRecovery\":"; s += String(twaiRecoveryCount);
   s += ",\"twaiRecoveryFail\":"; s += String(twaiRecoveryFailCount);
   s += ",\"twaiRecovering\":"; s += (twaiRecovering ? "true" : "false");
+  const NagHumanStatePure human = nagHumanRuntimeSnapshot();
+  bool speedValid; uint16_t speedRaw; uint32_t speedLastMs;
+  portENTER_CRITICAL(&nagSpeedMux);
+  speedValid = nagSpeedValid; speedRaw = nagSpeedRaw; speedLastMs = nagSpeedLastMs;
+  portEXIT_CRITICAL(&nagSpeedMux);
+  const bool speedFresh = speedValid && speedLastMs && (uint32_t)(now - speedLastMs) <= NAG_SPEED_FRESH_MS;
+  const float speedKph = speedValid ? ((float)speedRaw * 0.08f - 40.0f) : 0.0f;
+  s += ",\"humanPhase\":\"" + String(nagHumanPhaseNamePure(human.phase)) + "\"";
+  s += ",\"humanMotion\":\"" + String(nagHumanMotionNamePure(human.motion)) + "\"";
+  s += ",\"humanOutputNm\":"; s += String((float)human.outputRaw * 0.01f - 20.5f, 2);
+  s += ",\"speedFresh\":"; s += (speedFresh ? "true" : "false");
+  s += ",\"speedKph\":"; s += String(speedKph, 2);
   s += ",\"otaInProgress\":"; s += (otaInProgress ? "true" : "false");
   s += ",\"otaSuccess\":"; s += (otaSuccess ? "true" : "false");
   s += ",\"otaError\":"; s += (otaError ? "true" : "false");
@@ -813,6 +945,7 @@ static void httpSetMode() {
   Config nc;
   if (m == 1) cfgDefaultsModeB(nc);
   else if (m == 2) cfgDefaultsModeC(nc);
+  else if (m == 3) cfgDefaultsModeH(nc);
   else cfgDefaultsModeA(nc);
   
   portENTER_CRITICAL(&cfgMux); 
