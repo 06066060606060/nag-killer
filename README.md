@@ -1,16 +1,21 @@
-# Nag-killer V3.1 ESP32-S3
+# Nag-killer V3.5a1 ESP32-S3 
+eliminate the "hands on the wheel" prompt while using Autopilot/FSD.
 
 > ⚠️ Research / educational firmware only.
 >
 > This project interacts with a Tesla vehicle CAN bus. It is intended for controlled bench testing, code review, and research environments only.It sends signals directly to the controller, not a physical command to the steering wheel. Do not use this on public roads or in any situation where unsafe behavior could put people or property at risk. You are responsible for your own testing, wiring, configuration, and local laws.
 ---
 
-## What Update 3.1 Changes 
+## What Update 3.5a1 Changes 
 
-- New mode C (Random walk variation) by @wewe9v9v 
-- OTA Update 
-- New dashboard design 
-- TWAI auto recovery 
+- Rebased on the validated Working v3.1 Single-CAN runtime plus Mode H from the v3.1H1 branch. 
+- New Mode H — Human Interaction 
+- No CAN/TWAI/NAG engine behavior change from v3.1H1; firmware version identifier updated only. 
+- Dashboard redesigned with automatic light/dark themes. 
+- Dark mode uses the approved neutral-charcoal palette and removes light-theme residue from cards, navigation, controls, pills, inputs, and tables. 
+- Rebalanced Mode A/B/C/H selector sizing. 
+- Mode H now has an explicit selected visual state with blue highlight and `SELECTED` badge; A/B/C also show selected-state emphasis. 
+- Mode H remains capped at 2.00 Nm with the existing 1.50–2.00 Nm default event envelope. 
 
 ---
 
@@ -38,47 +43,6 @@ The dashboard exposes a local WiFi/web interface for configuration and live stat
 
 SSID: Setup-XXXX  
 Password: 12345678
-
-## Modes (one click in the dashboard)
-
-### A — Simple
-CAN `0x370`, fixed `+1.80 Nm`, `handsOn=1` on every echoed frame. 
-
-### B — TSL6P (burst/pause)
-CAN `0x370`, torque cycles through `{+1.80, +1.50, −1.50, −1.80}` Nm,
-**bursty time pattern**: `1000 ms` of injection, `1500 ms` of rest by
-default (both configurable). Mirrors the actual TSL6P device behaviour
-observed in sniff logs — the rest periods are now believed to be the
-real reason TSL6P avoids detection on stricter firmware (per @JNP's
-re-analysis of the log).
-
-### C — Random Walk Variation
-Add random walk variation in the injected torque values in order to evade any telemetry detection.
-Always applies positive torque values (human like).
-not inject if there is real hands on.
- 
-## Common endpoints
-
-| Endpoint      | Method   | Purpose               |
-| ------------- | -------- | --------------------- |
-| `/`           | GET      | Main dashboard        |
-| `/api/config` | GET      | Current configuration |
-| `/api/stats`  | GET      | Live runtime stats    |
-| `/api/update` | POST/GET | Update settings       |
-| `/api/reset`  | POST/GET | Reset config          |
-
----
-
-## CAN State Labels
-
-Dashboard CAN state labels were corrected to match ESP-IDF TWAI state ordering:
-
-| Value | State      |
-| ----- | ---------- |
-| 0     | Stopped    |
-| 1     | Running    |
-| 2     | Bus-off    |
-| 3     | Recovering |
 
 ---
 
@@ -119,15 +83,6 @@ Before any live vehicle testing, validate behavior in the safest possible way:
 Do not assume a successful compile means the system is safe.
 
 
-## Variant
-- Nag-killer by we9v9v HW3 FSD mode C 
-https://github.com/we9v9v/nag-killer-9v-random/tree/main 
-
-- Nag-killer & EU-Summon-Unlock unified for LilyGO/T-2Can 
-https://github.com/06066060606060/T2CAN-Nag-killer-EU-unlock 
-
-- PlatformIO Project by Hboop 
-https://github.com/Hboop/nag-killer/tree/esp32s3-stability-safety-review 
 
 ## Credits
 
@@ -142,7 +97,6 @@ https://discord.gg/euPbYG8Npc
 
 > **Support the project:**
 
-<a href="https://www.buymeacoffee.com/xbmod" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
 Bitcoin: bc1pl9nuyhqd78gjc2wdcqr39de7qwtff732ngr28vy8r2sxfa7a6uzsrhe387  
 Lightning: ₿cakegrip53@phoenixwallet.me
