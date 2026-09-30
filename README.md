@@ -42,6 +42,8 @@ Vehicle speed is read from Party CAN frame `0x257`. EPAS source and injected fra
 
 ## Dashboard and API
 
+[Dashboard view](https://06066060606060.github.io/nag-killer/)
+
 Connect to the device AP and open `192.168.4.1`.
 
 | Endpoint | Method | Purpose |
