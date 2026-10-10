@@ -4,7 +4,7 @@
 #include "can_runtime.h"
 #include "web_api.h"
 
-#define FW_VERSION "v3.8.2-SC"
+#define FW_VERSION "v3.8.4-SC"
 
 static constexpr uint32_t DRIVER_WAKE_DELAY_MS = 10000u;
 
@@ -12,7 +12,7 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
   Serial.printf("NAG KILLER %s\n", FW_VERSION);
-  cfgLoad();
+  if (!cfgLoad()) Serial.println("NVS settings could not be read; NAG remains OFF.");
   if (xTaskCreatePinnedToCore(
           webTask, "web", 8192, nullptr, 2, nullptr, 0) != pdPASS) {
     Serial.println("Web task creation failed; local dashboard is unavailable.");

@@ -81,3 +81,22 @@ static inline NagSafetyDecisionPure nagEvaluateSafetyPure(
     reason = NAG_BLOCK_SPEED_STALE;
   return {reason == NAG_BLOCK_NONE, reason};
 }
+
+// During boot restore, show the unmet prerequisite instead of hiding it behind
+// RESTORING. AP engagement is a live gate, not a restore prerequisite.
+static inline uint8_t nagRestoreBlockReasonPure(const NagSafetyInputPure &input) {
+  if (input.effectiveOn) return nagEvaluateSafetyPure(input).reason;
+  if (!input.profileSelected) return NAG_BLOCK_PROFILE_NOT_SET;
+  if (!input.requestedOn) return NAG_BLOCK_NAG_OFF;
+  if (!input.twaiReady) return NAG_BLOCK_TWAI_NOT_READY;
+  if (input.otaActive) return NAG_BLOCK_OTA_ACTIVE;
+  if (!input.epasFresh) return NAG_BLOCK_EPAS_STALE;
+  if (input.selfEcho) return NAG_BLOCK_SELF_ECHO;
+  if (!input.stockHandsOnSupported) return NAG_BLOCK_STOCK_HANDS_ON;
+  if (!input.torqueWithinLimit) return NAG_BLOCK_TORQUE_LIMIT;
+  if (input.dasRequired && (!input.dasValid || !input.dasFresh))
+    return NAG_BLOCK_DAS_STALE;
+  if (input.modeH && (!input.speedValid || !input.speedFresh))
+    return NAG_BLOCK_SPEED_STALE;
+  return NAG_BLOCK_RESTORING;
+}

@@ -13,6 +13,12 @@
 static WebServer server(80);
 static bool otaUploadStarted = false;
 static bool otaUploadFailed = false;
+static bool otaUploadEnded = false;
+static const char *otaStage = "idle";
+static size_t otaReceivedBytes = 0;
+static uint32_t otaAttempt = 0;
+static uint8_t otaUpdateError = 0;
+static char otaUpdateMessage[96] = "";
 
 static bool parseUIntBounded(const String &text, uint32_t minimum,
                              uint32_t maximum, uint32_t &value) {
@@ -80,7 +86,7 @@ static void httpConfig() {
   const Config c = cfgSnapshot();
   char json[1400];
   snprintf(json, sizeof(json),
-      "{\"version\":\"v3.8.2-SC\",\"enabled\":%s,\"mode\":%u,"
+      "{\"version\":\"v3.8.3-SC\",\"enabled\":%s,\"mode\":%u,"
       "\"profile\":%u,\"profileLabel\":\"%s\",\"apOnly\":%s,"
       "\"apOnlyEditable\":%s,"
       "\"hoRate\":%u,\"burstMs\":%u,\"pauseMs\":%u,"
@@ -135,8 +141,9 @@ static void httpStatus() {
       s.runtime.diagnostics.blockReason == NAG_BLOCK_NONE &&
       s.runtime.diagnostics.lastTxMs != 0u &&
       (uint32_t)(nowMs - s.runtime.diagnostics.lastTxMs) <= 1000u;
-  const uint8_t statusReason = statusGate.allowed
-      ? s.runtime.diagnostics.blockReason : statusGate.reason;
+  const uint8_t statusReason = !effectiveOn && s.config.enabled
+      ? nagRestoreBlockReasonPure(statusInput)
+      : statusGate.allowed ? s.runtime.diagnostics.blockReason : statusGate.reason;
   const char *block = s.recovering ? "CAN RECOVERY" :
       nagBlockReasonLabelPure(statusReason);
   char json[2400];
@@ -195,7 +202,10 @@ static void httpSetNag() {
     return;
   }
   candidate.enabled = enabled;
-  cfgCommit(candidate, RUNTIME_RESET_MASTER);
+  if (!cfgCommit(candidate, RUNTIME_RESET_MASTER)) {
+    sendJson(500, "{\"error\":\"Settings could not be saved\"}");
+    return;
+  }
   sendJson(200, "{\"ok\":true}");
 }
 
@@ -208,7 +218,10 @@ static void httpSetMode() {
   }
   Config candidate = cfgSnapshot();
   configApplyModeDefaultsPure(candidate, (uint8_t)mode);
-  cfgCommit(candidate, RUNTIME_RESET_MODE);
+  if (!cfgCommit(candidate, RUNTIME_RESET_MODE)) {
+    sendJson(500, "{\"error\":\"Settings could not be saved\"}");
+    return;
+  }
   sendJson(200, "{\"ok\":true}");
 }
 
@@ -222,7 +235,10 @@ static void httpSetProfile() {
   }
   Config candidate = cfgSnapshot();
   configApplyProfilePure(candidate, (uint8_t)profile);
-  cfgCommit(candidate, RUNTIME_RESET_PROFILE);
+  if (!cfgCommit(candidate, RUNTIME_RESET_PROFILE)) {
+    sendJson(500, "{\"error\":\"Settings could not be saved\"}");
+    return;
+  }
   sendJson(200, "{\"ok\":true}");
 }
 
@@ -294,7 +310,10 @@ static void httpSetSettings() {
     server.send(400, "application/json", "{\"error\":\"Settings are outside safe limits\"}");
     return;
   }
-  cfgCommit(candidate, RUNTIME_RESET_AP_GATE);
+  if (!cfgCommit(candidate, RUNTIME_RESET_AP_GATE)) {
+    sendJson(500, "{\"error\":\"Settings could not be saved\"}");
+    return;
+  }
   sendJson(200, "{\"ok\":true}");
 }
 
@@ -310,20 +329,62 @@ static void httpFactoryReset() {
     server.send(500, "application/json", "{\"error\":\"Factory reset failed\"}");
     return;
   }
-  cfgCommit(configDefaultsPure(), RUNTIME_RESET_FACTORY);
   sendJson(200, "{\"ok\":true,\"restarting\":true}");
   delay(200);
   ESP.restart();
 }
 
+// Keep the first Update fault before abort() replaces its code with ABORT.
+static void otaFail(const char *stage, const char *fallback) {
+  if (!otaUploadFailed) {
+    otaStage = stage;
+    otaUpdateError = Update.getError();
+    snprintf(otaUpdateMessage, sizeof(otaUpdateMessage), "%s",
+             Update.hasError() ? Update.errorString() : fallback);
+    otaUploadFailed = true;
+  }
+  Update.abort();
+}
+
+static void otaSendDiagnostics(int status) {
+  // Error text comes only from fixed Update messages or fixed local fallbacks.
+  char error[200] = "";
+  if (otaUploadFailed) {
+    snprintf(error, sizeof(error),
+             "\"error\":\"Firmware update failed at %s (Update %u, received %lu bytes): %s\",",
+             otaStage, (unsigned)otaUpdateError,
+             (unsigned long)otaReceivedBytes, otaUpdateMessage);
+  }
+  char body[480];
+  snprintf(body, sizeof(body),
+           "{%s\"attempt\":%lu,\"active\":%s,\"failed\":%s,\"stage\":\"%s\","
+           "\"updateError\":%u,\"updateMessage\":\"%s\",\"receivedBytes\":%lu}",
+           error, (unsigned long)otaAttempt, otaInProgress ? "true" : "false",
+           otaUploadFailed ? "true" : "false", otaStage,
+           (unsigned)otaUpdateError, otaUpdateMessage,
+           (unsigned long)otaReceivedBytes);
+  sendJson(status, body);
+}
+
+static void httpOtaStatus() {
+  otaSendDiagnostics(200);
+}
+
 static void httpUpdateFinish() {
-  const bool ok = otaUploadStarted && !otaUploadFailed && !Update.hasError() &&
-                  Update.end(true);
-  if (!ok) {
+  if (!otaUploadStarted && !otaUploadFailed) {
+    otaFail("request", "No firmware upload received");
+  }
+  if (!otaUploadFailed && (Update.hasError() || !Update.end(true))) {
+    otaFail("end", "Firmware finalization failed");
+  }
+  if (otaUploadFailed) {
+    otaUploadStarted = false;
     otaInProgress = false;
-    server.send(500, "application/json", "{\"error\":\"Firmware update failed\"}");
+    otaSendDiagnostics(500);
     return;
   }
+  otaStage = "done";
+  otaUploadStarted = false;
   sendJson(200, "{\"ok\":true,\"restarting\":true}");
   delay(250);
   ESP.restart();
@@ -332,17 +393,40 @@ static void httpUpdateFinish() {
 static void httpUpdateUpload() {
   HTTPUpload &upload = server.upload();
   if (upload.status == UPLOAD_FILE_START) {
+    // WebServer sets 5 s before parsing; update its live payload connection.
+    server.client().setTimeout(30000u);
+    ++otaAttempt;
+    otaUploadStarted = false;
+    otaUploadFailed = false;
+    otaUploadEnded = false;
+    otaStage = "receive";
+    otaReceivedBytes = 0;
+    otaUpdateError = 0;
+    otaUpdateMessage[0] = '\0';
     otaInProgress = true;
     canRuntimeInvalidate(RUNTIME_RESET_OTA);
     otaUploadStarted = Update.begin(UPDATE_SIZE_UNKNOWN);
-    otaUploadFailed = !otaUploadStarted;
+    if (!otaUploadStarted) otaFail("begin", "Firmware initialization failed");
   } else if (upload.status == UPLOAD_FILE_WRITE) {
-    if (!otaUploadStarted || Update.write(upload.buf, upload.currentSize) !=
-        upload.currentSize) otaUploadFailed = true;
+    otaReceivedBytes += upload.currentSize;
+    if (!otaUploadFailed &&
+        (!otaUploadStarted || Update.write(upload.buf, upload.currentSize) !=
+         upload.currentSize)) {
+      otaFail("write", "Firmware write was incomplete");
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    otaUploadEnded = true;
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
-    otaUploadFailed = true;
-    Update.abort();
+    // Partial bytes have not reached WRITE; after END currentSize is counted.
+    const size_t knownBytes = upload.totalSize +
+                             (otaUploadEnded ? 0u : upload.currentSize);
+    if (knownBytes > otaReceivedBytes) otaReceivedBytes = knownBytes;
+    if (!otaUploadFailed) Update.abort();
+    otaFail("aborted", "Upload interrupted");
+    otaUploadStarted = false;
     otaInProgress = false;
+    // The parser returns false on ABORT, so Finish cannot send an HTTP error.
+    // Keep this record available through /api/ota after the client reconnects.
   }
 }
 
@@ -355,6 +439,7 @@ static void webBegin() {
   server.on("/", HTTP_GET, httpRoot);
   server.on("/api/config", HTTP_GET, httpConfig);
   server.on("/api/status", HTTP_GET, httpStatus);
+  server.on("/api/ota", HTTP_GET, httpOtaStatus);
   server.on("/api/nag", HTTP_POST, httpSetNag);
   server.on("/api/mode", HTTP_POST, httpSetMode);
   server.on("/api/profile", HTTP_POST, httpSetProfile);

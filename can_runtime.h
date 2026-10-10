@@ -20,6 +20,7 @@ static constexpr uint32_t TWAI_RECOVERY_TIMEOUT_MS = 1800u;
 static constexpr uint16_t MODE_C_RAW_MIN = 0x898u;
 static constexpr uint16_t MODE_C_RAW_MAX = 0x8B6u;
 static constexpr uint16_t MODE_C_MAX_STEP = 15u;
+static constexpr uint16_t CAN_RX_BATCH_MAX = 32u;
 
 struct CanRuntimeSnapshot {
   Config config;
@@ -245,9 +246,10 @@ static bool canRuntimeRestorePrerequisites(const Config &config,
       (uint32_t)(nowMs - live.lastSpeedMs) <= SPEED_FRESH_MS;
   NagRestorePrerequisitesInputPure input = {};
   input.profileSelected = config.profile != PROFILE_UNSET;
-  input.twaiReady = twaiReady;
+  input.twaiReady = twaiReady && !twaiRecovering;
   input.otaActive = otaInProgress;
-  input.epasValid = live.epasValid;
+  input.epasValid = live.epasValid && live.lastEpasMs != 0u &&
+      (uint32_t)(nowMs - live.lastEpasMs) <= EPAS_FRESH_MS;
   input.stockHandsOnSupported = live.epasHandsOn <= 1u;
   input.dasRequired = configDasRequiredPure(config);
   input.dasFresh = dasFresh;
@@ -256,8 +258,65 @@ static bool canRuntimeRestorePrerequisites(const Config &config,
   return nagRestorePrerequisitesReadyPure(input);
 }
 
+static NagSafetyInputPure canRuntimeSafetyInput(const Config &config,
+                                                const AppLiveContext &live,
+                                                uint32_t nowMs,
+                                                bool effectiveOn) {
+  NagSafetyInputPure input = {};
+  input.profileSelected = config.profile != PROFILE_UNSET;
+  input.requestedOn = config.enabled;
+  input.effectiveOn = effectiveOn;
+  input.twaiReady = twaiReady && !twaiRecovering;
+  input.otaActive = otaInProgress;
+  input.epasFresh = live.epasValid && live.lastEpasMs != 0u &&
+      (uint32_t)(nowMs - live.lastEpasMs) <= EPAS_FRESH_MS;
+  input.selfEcho = false;
+  input.stockHandsOnSupported = live.epasHandsOn <= 1u;
+  input.torqueWithinLimit = true;
+  input.apOnlyInjection = config.apOnlyInjection;
+  input.dasRequired = configDasRequiredPure(config);
+  input.dasValid = live.dasValid;
+  input.dasFresh = live.lastDasMs != 0u &&
+      (uint32_t)(nowMs - live.lastDasMs) <= DAS_FRESH_MS;
+  input.apActive = canApActive(live.apState);
+  input.modeH = config.mode == MODE_H;
+  input.speedValid = live.speedValid;
+  input.speedFresh = live.lastSpeedMs != 0u &&
+      (uint32_t)(nowMs - live.lastSpeedMs) <= SPEED_FRESH_MS;
+  return input;
+}
+
+static bool canRuntimeUpdateRestore(uint32_t nowMs) {
+  // Config commits and runtime invalidation hold this same mutex. Snapshot and
+  // update together so a tick cannot restore an earlier configuration epoch.
+  if (!canTxMutex ||
+      xSemaphoreTake(canTxMutex, pdMS_TO_TICKS(10)) != pdTRUE) return false;
+  const Config config = cfgSnapshot();
+  portENTER_CRITICAL(&runtimeMux);
+  const bool prerequisites = canRuntimeRestorePrerequisites(
+      config, appRuntime.live, nowMs);
+  const NagRestoreResultPure result = nagRestoreUpdatePure(
+      appRuntime.restore, nowMs, config.enabled, prerequisites,
+      NAG_RESTORE_DELAY_MS);
+  appRuntime.effectiveEnabled = result.effectiveEnabled;
+  appRuntime.restoreRemainingMs = result.remainingMs;
+  appRuntime.restorePhase = result.phase;
+  const NagSafetyInputPure input = canRuntimeSafetyInput(
+      config, appRuntime.live, nowMs, result.effectiveEnabled);
+  appRuntime.diagnostics.blockReason = nagRestoreBlockReasonPure(input);
+  if (appRuntime.diagnostics.blockReason != NAG_BLOCK_NONE)
+    appRuntime.diagnostics.lastBlockMs = nowMs;
+  portEXIT_CRITICAL(&runtimeMux);
+  xSemaphoreGive(canTxMutex);
+  return true;
+}
+
 static void canRuntimeProcessEpas(const twai_message_t &frame,
-                                  const Config &config, uint32_t nowMs) {
+                                  const Config &config, uint32_t nowMs,
+                                  uint32_t decisionEpoch) {
+  // Observe an expired previous source before replacing its timestamp, even if
+  // this is the first received frame after a long interruption.
+  if (!canRuntimeUpdateRestore(nowMs)) return;
   Epas370SourcePure source = {};
   if (!epas370DecodeSourcePure(frame.data, frame.data_length_code, source)) {
     canRuntimeRecordBlock(NAG_BLOCK_EPAS_STALE, nowMs);
@@ -287,51 +346,27 @@ static void canRuntimeProcessEpas(const twai_message_t &frame,
   }
 
   portENTER_CRITICAL(&runtimeMux);
+  if (runtimeEpoch != decisionEpoch) {
+    portEXIT_CRITICAL(&runtimeMux);
+    return;
+  }
   appRuntime.live.epasValid = true;
   memcpy(appRuntime.live.epasData, frame.data, 8u);
   appRuntime.live.epasTorqueRaw = source.torqueRaw;
   appRuntime.live.epasHandsOn = source.handsOn;
   appRuntime.live.lastEpasMs = nowMs;
   appRuntime.diagnostics.epasRxFrames++;
-  const AppLiveContext live = appRuntime.live;
   portEXIT_CRITICAL(&runtimeMux);
 
-  const uint32_t decisionEpoch = runtimeEpochSnapshot();
-  const bool prerequisites = canRuntimeRestorePrerequisites(config, live, nowMs);
-  NagRestoreResultPure restoreResult;
+  canRuntimeUpdateRestore(nowMs);
   portENTER_CRITICAL(&runtimeMux);
-  restoreResult = nagRestoreUpdatePure(
-      appRuntime.restore, nowMs, config.enabled, prerequisites,
-      NAG_RESTORE_DELAY_MS);
-  appRuntime.effectiveEnabled = restoreResult.effectiveEnabled;
-  appRuntime.restoreRemainingMs = restoreResult.remainingMs;
-  appRuntime.restorePhase = restoreResult.phase;
+  const AppLiveContext live = appRuntime.live;
+  const bool effectiveOn = appRuntime.effectiveEnabled;
   portEXIT_CRITICAL(&runtimeMux);
-
-  const bool dasFresh = live.dasValid && live.lastDasMs != 0u &&
-      (uint32_t)(nowMs - live.lastDasMs) <= DAS_FRESH_MS;
-  const bool speedFresh = live.speedValid && live.lastSpeedMs != 0u &&
-      (uint32_t)(nowMs - live.lastSpeedMs) <= SPEED_FRESH_MS;
-  NagSafetyInputPure gateInput = {};
-  gateInput.profileSelected = config.profile != PROFILE_UNSET;
-  gateInput.requestedOn = config.enabled;
-  gateInput.effectiveOn = restoreResult.effectiveEnabled;
-  gateInput.twaiReady = twaiReady;
-  gateInput.otaActive = otaInProgress;
-  gateInput.epasFresh = live.lastEpasMs != 0u &&
-      (uint32_t)(nowMs - live.lastEpasMs) <= EPAS_FRESH_MS;
-  gateInput.selfEcho = false;
-  gateInput.stockHandsOnSupported = source.handsOn <= 1u;
-  gateInput.torqueWithinLimit = true;
-  gateInput.apOnlyInjection = config.apOnlyInjection;
-  gateInput.dasRequired = configDasRequiredPure(config);
-  gateInput.dasValid = live.dasValid;
-  gateInput.dasFresh = dasFresh;
-  gateInput.apActive = canApActive(live.apState);
-  gateInput.modeH = config.mode == MODE_H;
-  gateInput.speedValid = live.speedValid;
-  gateInput.speedFresh = speedFresh;
-  const NagSafetyDecisionPure gate = nagEvaluateSafetyPure(gateInput);
+  const NagSafetyInputPure gateInput = canRuntimeSafetyInput(
+      config, live, nowMs, effectiveOn);
+  const uint8_t reason = nagRestoreBlockReasonPure(gateInput);
+  const NagSafetyDecisionPure gate = {reason == NAG_BLOCK_NONE, reason};
   if (!gate.allowed) {
     if (config.mode == MODE_H) {
       portENTER_CRITICAL(&runtimeMux);
@@ -389,6 +424,7 @@ static void canRuntimeProcessEpas(const twai_message_t &frame,
 
 static void canRuntimeProcessFrame(const twai_message_t &frame,
                                    uint32_t nowMs) {
+  const uint32_t decisionEpoch = runtimeEpochSnapshot();
   const Config config = cfgSnapshot();
   portENTER_CRITICAL(&runtimeMux);
   appRuntime.diagnostics.rxFrames++;
@@ -413,7 +449,7 @@ static void canRuntimeProcessFrame(const twai_message_t &frame,
     return;
   }
   if (frame.identifier == EPAS_370_ID)
-    canRuntimeProcessEpas(frame, config, nowMs);
+    canRuntimeProcessEpas(frame, config, nowMs, decisionEpoch);
 }
 
 static void canRuntimeRecoveryBoundary() {
@@ -480,9 +516,12 @@ static void canRuntimeTask(void *arg) {
   (void)arg;
   for (;;) {
     twai_message_t frame = {};
-    while (twai_receive(&frame, pdMS_TO_TICKS(2)) == ESP_OK)
+    for (uint16_t count = 0u; count < CAN_RX_BATCH_MAX; ++count) {
+      if (twai_receive(&frame, pdMS_TO_TICKS(2)) != ESP_OK) break;
       canRuntimeProcessFrame(frame, millis());
+    }
     canRuntimePollRecovery(millis());
+    canRuntimeUpdateRestore(millis());
     vTaskDelay(pdMS_TO_TICKS(1));
   }
 }

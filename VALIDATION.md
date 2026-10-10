@@ -1,89 +1,46 @@
-# v3.8.2-SC Validation Record
+# v3.8.4-SC Validation Record
 
-Validation date: 2026-09-30 (Asia/Seoul)
+Validation date: 2026-10-10 (Asia/Seoul).
 
-## Source identity
+## Scope and source identity
 
-- Input archive: `/Users/mezu/Downloads/nag-killer-main.zip`
-- Input SHA-256: `d078d66d2f0369d625ec1d6253ed549e54c7f30a2df99d56163e2f6b781ecb24`
-- Restore/dashboard implementation revision: `624a812`
-- Firmware label: `v3.8.2-SC`
+Based on the unchanged `firmware/nag-killer/nag-killer-v3.8.3-SC` package. This bounded patch changes OTA payload receive idle timeout and failure reporting/retry behavior. Earlier package results are historical evidence and do not validate this patch.
 
-## Host verification
+## Focused regression evidence
 
-Canonical command: `python3 tools/run_host_tests.py`
+A compiled probe executing the production OTA handlers confirmed behavioral RED before implementation: the live client retained 5,000 ms instead of the intended 30,000 ms. Focused GREEN passed `test_sc_ota_handler.py` with warnings treated as errors. The probe exercises a successful upload, begin failure, failed write followed by parser abort, partial-byte abort, immediate retry, abort after file END without duplicate byte counting, finalization failure, and a POST without an upload. First Update failures survive abort cleanup; parser-aborted uploads retain diagnostics for GET `/api/ota` without assuming a POST finish callback runs.
 
-The full suite was run twice from fresh temporary executable directories. Both runs reported:
+The workspace separately exercised the installed ESP32 core 3.3.12 `_uploadReadByte` implementation with virtual time: a 6-second pause fails at the default 5 seconds and succeeds at 30 seconds; a 31-second pause aborts at 30 seconds; disconnect exits promptly; repeated 29-second gaps allow a 58-second total duration. This supplemental SDK probe is not a physical network or flash test and is not a package test dependency.
 
-- 7 C++ test executables passed with `-std=c++17 -Wall -Wextra -Werror`
-- 13 Python contract tests passed
-- no failures or warnings
+Dashboard behavioral RED was confirmed for unlocked active-upload controls, falsely successful HTTP 200 replies, invalid attempt attribution, and unbounded diagnostic GETs before each corresponding fix. The final focused run passed 3/3 Python files (10 unittest cases, including the compiled handler probe) and 2/2 JavaScript browser files in 32.883 seconds.
 
-C++ coverage:
+Browser checks covered 12 source/embedded × 320/390/430 px × light/dark scenarios per browser file. OTA coverage includes 48 regular upload paths plus 8 malformed/rejected reply, invalid attempt, and hung diagnostic cases. Both dashboards expose complete wrapping error details without horizontal overflow, restore upload controls after failure, recover only new-attempt diagnostics, suspend status polling during upload, and resume after a diagnostic timeout. Existing all-page, restore-waiting, countdown, and failed-save behavior also passed. The 320 px light source and 390 px dark embedded screenshots were visually inspected; existing typography, controls, cards, and themes were retained.
 
-- generated gzip header compile and gzip magic
-- configuration defaults, sanitization, mode transitions, and hard torque bounds
-- EPAS `0x370` decode/compose, Hands-On handling, and echo checks
-- Mode H Rev4 scheduling, carrier behavior, speed/Visual gates, and ±1.80 Nm final cap
-- NAG safety decisions, profile-aware DAS restore/live gates, forced Legacy AP-only OFF behavior, AP-independent 3-second safe restore, and the reboot-scoped READY latch
-- automatic `0x399`/`0x39B` DAS qualification, permanent boot-session locking, and Party speed decoding
+The targeted generated-dashboard contract rebuilt twice and obtained identical headers. Dashboard sizes: source 19,432 bytes; minified 19,379 bytes; gzip 6,147 bytes. Header SHA-256: `3e92170db6ad1643ebfbe1a092e7205564a5a74fab6609ce8dfd9b74bc9c5c66`.
 
-Python contract coverage:
+Final whole-package completion and target compilation passed after review. Paired OTA artifact evidence is recorded below.
 
-- single-CAN runtime gates, transmit mutex, and epoch recheck
-- dedicated `nag-sc` persistence and reset boundaries
-- validated dashboard API mutations
-- English status-first dashboard contents and exclusions
-- deterministic dashboard gzip generation
-- boot order, exact firmware version, pins, OTA boundary, and scoped factory reset
-- source archive identity
+## OTA diagnostics semantics
 
-## Dashboard determinism
+`/api/ota` is read-only and reports the current boot's latest upload attempt, active/failed state, failure stage, Update error code/message, and `receivedBytes`. An interrupted parser does not call the POST completion handler; reconnect and read this endpoint instead. The first Update failure is retained even if abort cleanup changes the SDK's internal error.
 
-`python3 tools/build_dashboard.py` was run twice. Both generated `index_html.h` files had SHA-256:
+`receivedBytes` counts known file payload bytes, including an undelivered partial upload buffer on abort. It excludes multipart framing and any bytes still held privately by the parser. It does not measure wire bytes or prove successful flash writes. After file END, the final buffer is not counted twice. Diagnostics are in RAM, reset on reboot/new upload, and contain no uploaded filename or firmware content.
 
-`c878d045e9cc9494d051c6eb707fe91bfba1d95833c86cb9686b26a9e416e31b`
+Dashboard diagnostic GETs have an independent 2.5-second deadline. An unresponsive diagnostic endpoint leaves the original upload error visible and releases the controls; it does not impose an overall deadline on the upload POST. HTTP 200 is accepted as upload success only with an explicit `ok: true` response.
 
-The generated header was also compiled by the host suite and its gzip payload was decompressed by the Python contract test.
+The 30-second limit is an idle limit for each payload read, not an overall upload deadline. Header/body parsing outside the payload reader retains SDK defaults. This patch does not validate product family compatibility of an uploaded image.
 
-The dashboard was refreshed from the visual language of the supplied v3.8 source while retaining only SC controls and API routes. It was rendered at a 390×844 mobile viewport: Home and Mode pages had no horizontal overflow, the floating navigation stayed 30 px above the viewport bottom, and page switching reset scroll position to zero. Light and system dark color rules are included.
+## Target configuration and physical boundaries
 
-## Topology and exclusion audit
+Required OTA build target remains `esp32:esp32:m5stack_atoms3` (8 MB flash, default OTA partitions, PSRAM disabled), matching v3.8.3-SC. Pins remain TX GPIO 5 / RX GPIO 6, TWAI 500 kbit/s. OTA artifacts contain only the application image.
 
-Production `.h` and `.ino` files were searched directly.
+No physical flash, serial access, live CAN access, controller boot, device OTA, vehicle behavior, or road testing was performed. A host test or successful target build cannot establish Wi-Fi reliability, power-loss tolerance, actual flash health, or vehicle behavior. Verify a slow upload, disconnect/reconnect diagnostics, immediate retry, and normal restart on the installed controller before relying on the patch.
 
-- Fixed built-in TWAI pins: RX GPIO 6, TX GPIO 5
-- Requested frame IDs only: Party speed `0x257`, auto-qualified DAS `0x399`/`0x39B`, EPAS `0x370`
-- No MCP2515 or external CAN-controller implementation
-- No dual-CAN router or user-editable CAN IDs
-- No R79, Auto Blinker, NOA, or `DAS_behaviorType` implementation
-- No selectable older Mode H revisions
-- Profile selection is retained for configuration compatibility but does not control DAS ID selection
-- The first DAS ID with three sequential DLC-8, 500 ms counter frames remains locked until reboot; no stale-time source switching is implemented
+## Final completion and OTA artifacts
 
-## ESP32-S3 target build
-
-The target sketch compiled successfully with Arduino CLI 1.5.1, ESP32 core
-3.3.12, and FQBN `esp32:esp32:esp32s3`:
-
-- Program storage: 941,201 bytes of 1,310,720 bytes (71%)
-- Global variables: 47,080 bytes of 327,680 bytes (14%)
-- Remaining dynamic memory: 280,600 bytes
-
-The generic ESP32S3 Dev Module profile verifies compilation, but the exact
-flash/PSRAM/USB options must still be matched to the installed board before
-flashing.
-
-## Required hardware validation
-
-Before any road use, validate on an isolated bench and then in a controlled private environment:
-
-1. Compile with the exact intended ESP32-S3 Arduino board profile.
-2. Verify no transmission during the 10-second boot delay, saved-OFF state, profile-unset state, stale-input states, OTA, and CAN recovery.
-3. Verify saved-ON restoration requires 3 seconds of continuously valid CAN prerequisites and starts while AP is inactive. On Legacy profiles, verify the countdown and live injection do not depend on DAS; on Highland / Juniper, verify DAS remains required. Confirm transient authorization loss after READY does not restart the countdown.
-4. Verify Legacy Y and Legacy 3 force AP-only OFF and disable its dashboard control. Verify Highland / Juniper retains selectable AP-only behavior and its fresh-DAS gate. Verify Mode H retains its speed gate, and verify Visual Rescue only when a valid DAS Visual source is present.
-5. Verify Mode H output never exceeds ±1.80 Nm and exact self-echo suppression works on the installed transceiver.
-6. Validate `Legacy Y`, `Legacy 3`, and `Highland / Juniper` individually on their matching vehicle hardware, including profile-specific DAS/AP policy, optional Legacy Visual telemetry, speed, and EPAS signal layout.
-7. Test bus-off/unplug recovery, dashboard status accuracy, OTA failure handling, restart, and factory reset.
-
-A host PASS or successful target compile is not a substitute for those vehicle-specific checks.
+- After all review fixes, `firmware_workflow.py completion` passed Python **7/7 files (41 unittest cases)**, C++ **8/8 binaries**, and JavaScript/browser **2/2 files**. Report: `/private/tmp/sc-v384-completion.json`; log: `/private/tmp/sc-v384-completion.log`.
+- Independent read-only review found no remaining actionable issue. A fresh official dashboard generation matches the tested/built header SHA-256 `3e92170db6ad1643ebfbe1a092e7205564a5a74fab6609ce8dfd9b74bc9c5c66`.
+- ESP32-S3 compile/link passed with Arduino CLI **1.5.1**, ESP32 core **3.3.12**, FQBN `esp32:esp32:m5stack_atoms3` (8 MB flash, default OTA partitions, PSRAM disabled). Program **941,549 / 1,310,720 bytes (71%)**; static RAM **47,392 / 327,680 bytes (14%)**, leaving **280,288 bytes**. Log: `/private/tmp/sc-v384-build.log`.
+- OTA `releases/nag-killer-v3.8.4-SC/nag-killer-v3.8.4-SC.bin`: **941,696 bytes**, SHA-256 `7d93e672fe955d4d7ab13ff81f98b2a5f8abc1112df9f2f37821469f1ca45ac4`. A matching deterministic, byte-verified source ZIP is provided in the same directory; artifact sizes/hashes are recorded in `build-evidence.json`.
+- Payload idle timeout applies after multipart file START; request/header parsing retains SDK defaults. Abort diagnostics cannot distinguish disconnect from timeout on their own. The reported real-device failure cause remains unconfirmed.
+- Product-family admission remains absent: this patch does not prevent SC/Universal cross-installation on compatible ESP32-S3 hardware. No controller flash, boot, actual OTA, serial/CAN access, vehicle or road test was performed.
